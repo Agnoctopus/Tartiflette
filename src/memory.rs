@@ -1,5 +1,7 @@
 //! Memory management
 
+use std::cmp::min;
+
 use bits::Alignement;
 use paging::{self, FrameAllocator, PageTable, VirtAddr, VirtRange};
 
@@ -168,11 +170,11 @@ impl VMMemory {
     }
 
     /// Map virtual memory area
-    pub fn mmap(&mut self, addr: VirtAddr, size: usize) {
-        assert!(addr.aligned(), "Page address must be aligned");
-
+    pub fn mmap(&mut self, addr: u64, size: usize) {
         // Compute pages range
-        let start = addr;
+        let start = VirtAddr::new(addr);
+        assert!(start.aligned(), "Page address must be aligned");
+
         let end = VirtAddr::new(start.address() + size as u64);
         let pages = VirtRange::new(start, end);
 
@@ -182,9 +184,104 @@ impl VMMemory {
         }
     }
 
-    /*
-     * TODO: Provide write/read functions
-     */
+    /// Returns the physical address of a page. Or nothing if the address is not mapped.
+    fn get_page_pa(&self, address: VirtAddr) -> Option<usize> {
+        let p4 = PageTable::from_addr(self.pmem.translate(self.page_directory));
+        let p3_addr = p4.next_table_address(address.p4_index());
+
+        if p3_addr.is_none() {
+            return None;
+        }
+
+        let p3 = PageTable::from_addr(self.pmem.translate(p3_addr.unwrap()));
+        let p2_addr = p3.next_table_address(address.p3_index());
+
+        if p2_addr.is_none() {
+            return None;
+        }
+
+        let p2 = PageTable::from_addr(self.pmem.translate(p2_addr.unwrap()));
+        let p1_addr = p2.next_table_address(address.p2_index());
+
+        if p1_addr.is_none() {
+            return None;
+        }
+
+        let p1 = PageTable::from_addr(self.pmem.translate(p1_addr.unwrap()));
+
+        p1.next_table_address(address.p1_index())
+    }
+
+    /// Returns whether a given VA is mapped into the address space
+    fn is_mapped(&self, address: VirtAddr) -> bool {
+        self.get_page_pa(address).is_some()
+    }
+
+    /// Reads data from the virtual address space
+    pub fn read(&self, addr: u64, output: &mut [u8]) {
+        // Compute the range of pages between VA and VA + read_size
+        let start = VirtAddr::new(addr);
+        let end = VirtAddr::new(addr + output.len() as u64);
+        let pages = VirtRange::new(start, end);
+
+        let mut index = 0;
+        let mut page_off = addr & (PAGE_SIZE as u64 - 1);
+
+        for page in pages {
+            // Get physical page for given VA
+            let pa = self.get_page_pa(page);
+
+            if pa.is_none() {
+                panic!("Trying to read from unmapped page");
+            }
+
+            let remaining_bytes = (output.len() - index) as u64;
+            let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
+            let bytes_to_copy = min(remaining_bytes, page_bytes);
+
+            // Partial read into the slice
+            self.pmem.read(
+                pa.unwrap() + page_off as usize,
+                &mut output[index..index + bytes_to_copy as usize],
+            );
+
+            page_off = 0;
+            index += bytes_to_copy as usize;
+        }
+    }
+
+    /// Writes data to the virtual address space
+    pub fn write(&mut self, addr: u64, input: &[u8]) {
+        // Compute the range of pages between VA and VA + read_size
+        let start = VirtAddr::new(addr);
+        let end = VirtAddr::new(addr + input.len() as u64);
+        let pages = VirtRange::new(start, end);
+
+        let mut index = 0;
+        let mut page_off = addr & (PAGE_SIZE as u64 - 1);
+
+        for page in pages {
+            // Get physical page for given VA
+            let pa = self.get_page_pa(page);
+
+            if pa.is_none() {
+                panic!("Trying to read from unmapped page");
+            }
+
+            let remaining_bytes = (input.len() - index) as u64;
+            let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
+            let bytes_to_copy = min(remaining_bytes, page_bytes);
+
+            // Partial read into the slice
+            self.pmem.write(
+                pa.unwrap() + page_off as usize,
+                &input[index..index + bytes_to_copy as usize],
+            );
+
+            page_off = 0;
+            index += bytes_to_copy as usize;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -196,14 +293,43 @@ mod tests {
     fn test_alloc_single() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
 
-        vm.mmap(VirtAddr::new(0x1337000), PAGE_SIZE);
+        vm.mmap(0x1337000, PAGE_SIZE);
     }
 
     #[test]
     fn test_alloc_multiple() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
 
-        vm.mmap(VirtAddr::new(0x1337000), PAGE_SIZE * 1);
-        vm.mmap(VirtAddr::new(0x1000), PAGE_SIZE * 1);
+        vm.mmap(0x1337000, PAGE_SIZE * 1);
+        vm.mmap(0x1000, PAGE_SIZE * 1);
+    }
+
+    #[test]
+    fn test_write_simple() {
+        let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
+
+        vm.mmap(0x1337000, PAGE_SIZE);
+
+        let magic: [u8; 4] = [0x41, 0x42, 0x43, 0x44];
+        let mut magic_result: [u8; 4] = [0; 4];
+
+        vm.write(0x1337444, &magic);
+        vm.read(0x1337444, &mut magic_result);
+
+        assert_eq!(magic, magic_result, "Read after write failed");
+    }
+
+    #[test]
+    fn test_write_cross_page() {
+        let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
+        vm.mmap(0x1337000, PAGE_SIZE * 2);
+
+        let magic: [u8; 4] = [0x41, 0x42, 0x43, 0x44];
+        let mut magic_result: [u8; 4] = [0; 4];
+
+        vm.write(0x1337ffd, &magic);
+        vm.read(0x1337ffd, &mut magic_result);
+
+        assert_eq!(magic, magic_result, "Read after write failed");
     }
 }
