@@ -63,7 +63,11 @@ impl PageTable {
 
     /// Get the next level `PageTable`
     #[inline]
-    pub fn next_table<A: FrameAllocator>(&self, entry_index: usize, allocator: &mut A) -> Option<&mut PageTable> {
+    pub fn next_table<A: FrameAllocator>(
+        &self,
+        entry_index: usize,
+        allocator: &mut A,
+    ) -> Option<&mut PageTable> {
         let table_address = self.next_table_address(entry_index);
         match table_address {
             Some(address) => Some(PageTable::from_addr(allocator.translate(address))),
@@ -339,9 +343,6 @@ pub struct VirtRange {
 impl VirtRange {
     /// Return a new instance of `VirtRange`
     pub fn new(mut start: VirtAddr, mut end: VirtAddr) -> Self {
-        start.align();
-        end.align();
-
         Self {
             start: start,
             end: end,
@@ -375,9 +376,12 @@ impl Iterator for VirtRange {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.start < self.end {
-            let page_address = self.start;
-            self.start = VirtAddr(self.start.0 + PAGE_SIZE as u64);
-            Some(page_address)
+            let mut tmp = self.start;
+            tmp.align();
+            let next_page = tmp.address() + PAGE_SIZE as u64;
+            self.start = VirtAddr::new(next_page);
+
+            Some(tmp)
         } else {
             None
         }
