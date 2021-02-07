@@ -17,6 +17,8 @@ pub trait FrameAllocator {
     fn allocate_frame(&mut self) -> Option<usize>;
     /// Deallocate a frame
     fn deallocate_frame(&mut self, frame_address: usize);
+    /// Translate a frame address to its virtual address
+    fn translate(&self, frame_address: usize) -> usize;
 }
 
 /// Page Table
@@ -49,7 +51,6 @@ impl PageTable {
         unsafe { &mut *(addr as *mut PageTable) }
     }
 
-
     /// Get the next level `PageTable` address
     #[inline]
     pub fn next_table_address(&self, entry_index: usize) -> Option<usize> {
@@ -62,10 +63,10 @@ impl PageTable {
 
     /// Get the next level `PageTable`
     #[inline]
-    pub fn next_table(&self, entry_index: usize) -> Option<&mut PageTable> {
+    pub fn next_table<A: FrameAllocator>(&self, entry_index: usize, allocator: &mut A) -> Option<&mut PageTable> {
         let table_address = self.next_table_address(entry_index);
         match table_address {
-            Some(address) => Some(PageTable::from_addr(address)),
+            Some(address) => Some(PageTable::from_addr(allocator.translate(address))),
             None => None,
         }
     }
@@ -77,7 +78,7 @@ impl PageTable {
         entry_index: usize,
         allocator: &mut A,
     ) -> &mut PageTable {
-        if self.next_table(entry_index).is_none() {
+        if self.next_table(entry_index, allocator).is_none() {
             assert!(!self.entries[entry_index].huge_page());
 
             let frame_address = allocator.allocate_frame().expect("Out of memory");
@@ -85,12 +86,12 @@ impl PageTable {
             self.entries[entry_index].set_present(true);
             self.entries[entry_index].set_writable(true);
 
-            let table = self.next_table(entry_index).unwrap();
+            let table = self.next_table(entry_index, allocator).unwrap();
             table.wipe();
         } else {
-            self.next_table(entry_index).unwrap();
+            self.next_table(entry_index, allocator).unwrap();
         }
-        self.next_table(entry_index).unwrap()
+        self.next_table(entry_index, allocator).unwrap()
     }
 
     /// Wipe a `PageTable`
