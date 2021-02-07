@@ -2,6 +2,9 @@
 
 #![warn(missing_docs)]
 
+mod cli;
+mod config;
+
 extern crate kvm_bindings;
 extern crate kvm_ioctls;
 extern crate libc;
@@ -24,8 +27,7 @@ const ASM_BYTES: &[u8] = &[
     0xf4, // hlt
 ];
 
-/// Main function
-fn main() {
+fn run() {
     // 1. Instantiate KVM.
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
 
@@ -103,6 +105,24 @@ fn main() {
                 break;
             }
             r => panic!("Unexpected exit reason: {:?}", r),
+        }
+    }
+}
+
+/// Main function
+fn main() {
+    // Get the program args as Vec<&str>
+    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<&str> = args.iter().map(String::as_ref).collect();
+
+    // Parse the command line
+    match cli::CLI::parse(args) {
+        Ok(_config) => {
+            run();
+        }
+        Err(error) => {
+            eprintln!("Error while parsing the command line.");
+            eprint!("{}", error)
         }
     }
 }
