@@ -7,6 +7,7 @@ extern crate paging;
 
 mod cli;
 mod config;
+mod memory;
 
 extern crate kvm_bindings;
 extern crate kvm_ioctls;
