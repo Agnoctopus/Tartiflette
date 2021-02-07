@@ -2,6 +2,9 @@
 
 #![warn(missing_docs)]
 
+extern crate bits;
+extern crate paging;
+
 mod cli;
 mod config;
 
