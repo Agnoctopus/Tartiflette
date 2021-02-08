@@ -99,23 +99,32 @@ impl VMPhysMem {
 
     /// Read a value from an address
     #[inline]
-    pub fn read_val<T>(&self, pa: usize) -> T {
-        assert!(pa + core::mem::size_of::<T>() <= self.size);
+    pub fn read_val<T>(&self, pa: usize) -> Result<T> {
+        let read_size = core::mem::size_of::<T>();
 
-        unsafe {
-            let val_ptr = self.raw_data.offset(pa as isize) as *const T;
-            val_ptr.read()
+        if pa + read_size > self.size {
+            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, read_size))
+        } else {
+            Ok(unsafe {
+                let val_ptr = self.raw_data.offset(pa as isize) as *const T;
+                val_ptr.read()
+            })
         }
     }
 
     /// Write a value to an address
     #[inline]
-    pub fn write_val<T>(&self, pa: usize, val: T) {
-        assert!(pa + core::mem::size_of::<T>() <= self.size);
+    pub fn write_val<T>(&self, pa: usize, val: T) -> Result<()> {
+        let write_size = core::mem::size_of::<T>();
 
-        unsafe {
-            let val_ptr = self.raw_data.offset(pa as isize) as *mut T;
-            val_ptr.write(val);
+        if pa + write_size > self.size {
+            Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, write_size))
+        } else {
+            unsafe {
+                let val_ptr = self.raw_data.offset(pa as isize) as *mut T;
+                val_ptr.write(val);
+            }
+            Ok(())
         }
     }
 
