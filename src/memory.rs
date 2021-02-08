@@ -103,6 +103,21 @@ impl VMPhysMem {
         })
     }
 
+    /// Return the guest physical region start address
+    pub fn guest_address(&self) -> usize {
+        0
+    }
+
+    /// Return the host region start address
+    pub fn host_address(&self) -> usize {
+        self.raw_data as usize
+    }
+
+    /// Return the size of the region
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
     /// Read a value from an address
     #[inline]
     pub fn read_val<T>(&self, pa: usize) -> Result<T> {
@@ -194,7 +209,7 @@ impl FrameAllocator for VMPhysMem {
 /// Virtual machine memory manager
 pub struct VMMemory {
     /// Physical memory of the VM
-    pmem: VMPhysMem,
+    pub pmem: VMPhysMem,
     /// Current page_directory
     page_directory: usize,
 }
