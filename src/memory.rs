@@ -212,7 +212,9 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page).expect("Trying to read from unmapped page");
+            let pa = self
+                .get_page_pa(page)
+                .expect("Trying to read from unmapped page");
 
             let remaining_bytes = (output.len() - index) as u64;
             // TODO page.address() ? Sure ?
@@ -244,7 +246,9 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page).expect("Trying to write from unmapped page");
+            let pa = self
+                .get_page_pa(page)
+                .expect("Trying to write from unmapped page");
 
             let remaining_bytes = (input.len() - index) as u64;
             // TODO page.address() ? Sure ?
@@ -319,8 +323,8 @@ mod tests {
         vm.mmap(0x1338000, PAGE_SIZE);
         vm.mmap(0x1337000, PAGE_SIZE);
 
-        let magic: [u8; 2*PAGE_SIZE] = [0x42; 2 * PAGE_SIZE];
-        let mut magic_result: [u8; 2*PAGE_SIZE] = [0u8; 2 * PAGE_SIZE];
+        let magic: [u8; 2 * PAGE_SIZE] = [0x42; 2 * PAGE_SIZE];
+        let mut magic_result: [u8; 2 * PAGE_SIZE] = [0u8; 2 * PAGE_SIZE];
 
         vm.write(0x1337000, &magic);
         vm.read(0x1337000, &mut magic_result);
