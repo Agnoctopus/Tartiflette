@@ -187,32 +187,14 @@ impl VMMemory {
     /// Returns the physical address of a page. Or nothing if the address is not mapped.
     fn get_page_pa(&self, address: VirtAddr) -> Option<usize> {
         let p4 = PageTable::from_addr(self.pmem.translate(self.page_directory));
-        let p3_addr = p4.next_table_address(address.p4_index());
-
-        if p3_addr.is_none() {
-            return None;
-        }
-
-        let p3 = PageTable::from_addr(self.pmem.translate(p3_addr.unwrap()));
-        let p2_addr = p3.next_table_address(address.p3_index());
-
-        if p2_addr.is_none() {
-            return None;
-        }
-
-        let p2 = PageTable::from_addr(self.pmem.translate(p2_addr.unwrap()));
-        let p1_addr = p2.next_table_address(address.p2_index());
-
-        if p1_addr.is_none() {
-            return None;
-        }
-
-        let p1 = PageTable::from_addr(self.pmem.translate(p1_addr.unwrap()));
+        let p3 = p4.next_table(address.p4_index(), &self.pmem)?;
+        let p2 = p3.next_table(address.p3_index(), &self.pmem)?;
+        let p1 = p2.next_table(address.p2_index(), &self.pmem)?;
 
         p1.next_table_address(address.p1_index())
     }
 
-    /// Returns whether a given VA is mapped into the address space
+    /// Returns whether a given `VirtAddr` is mapped into the address space
     fn is_mapped(&self, address: VirtAddr) -> bool {
         self.get_page_pa(address).is_some()
     }
@@ -227,24 +209,23 @@ impl VMMemory {
         let mut index = 0;
         let mut page_off = addr & (PAGE_SIZE as u64 - 1);
 
+        // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page);
-
-            if pa.is_none() {
-                panic!("Trying to read from unmapped page");
-            }
+            let pa = self.get_page_pa(page).expect("Trying to read from unmapped page");
 
             let remaining_bytes = (output.len() - index) as u64;
+            // TODO page.address() ? Sure ?
             let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
             let bytes_to_copy = min(remaining_bytes, page_bytes);
 
             // Partial read into the slice
             self.pmem.read(
-                pa.unwrap() + page_off as usize,
+                pa + page_off as usize,
                 &mut output[index..index + bytes_to_copy as usize],
             );
 
+            // Update cursor
             page_off = 0;
             index += bytes_to_copy as usize;
         }
@@ -260,24 +241,23 @@ impl VMMemory {
         let mut index = 0;
         let mut page_off = addr & (PAGE_SIZE as u64 - 1);
 
+        // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page);
-
-            if pa.is_none() {
-                panic!("Trying to read from unmapped page");
-            }
+            let pa = self.get_page_pa(page).expect("Trying to write from unmapped page");
 
             let remaining_bytes = (input.len() - index) as u64;
+            // TODO page.address() ? Sure ?
             let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
             let bytes_to_copy = min(remaining_bytes, page_bytes);
 
-            // Partial read into the slice
+            // Partial write from the slice
             self.pmem.write(
-                pa.unwrap() + page_off as usize,
+                pa + page_off as usize,
                 &input[index..index + bytes_to_copy as usize],
             );
 
+            // Update cursor
             page_off = 0;
             index += bytes_to_copy as usize;
         }
@@ -329,6 +309,21 @@ mod tests {
 
         vm.write(0x1337ffd, &magic);
         vm.read(0x1337ffd, &mut magic_result);
+
+        assert_eq!(magic, magic_result, "Read after write failed");
+    }
+
+    #[test]
+    fn test_write_huge() {
+        let mut vm = VMMemory::new(6 * PAGE_SIZE).expect("Could not allocate Vm memory");
+        vm.mmap(0x1338000, PAGE_SIZE);
+        vm.mmap(0x1337000, PAGE_SIZE);
+
+        let magic: [u8; 2*PAGE_SIZE] = [0x42; 2 * PAGE_SIZE];
+        let mut magic_result: [u8; 2*PAGE_SIZE] = [0u8; 2 * PAGE_SIZE];
+
+        vm.write(0x1337000, &magic);
+        vm.read(0x1337000, &mut magic_result);
 
         assert_eq!(magic, magic_result, "Read after write failed");
     }

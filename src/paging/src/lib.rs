@@ -66,7 +66,7 @@ impl PageTable {
     pub fn next_table<A: FrameAllocator>(
         &self,
         entry_index: usize,
-        allocator: &mut A,
+        allocator: &A,
     ) -> Option<&mut PageTable> {
         let table_address = self.next_table_address(entry_index);
         match table_address {
