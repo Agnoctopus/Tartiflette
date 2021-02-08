@@ -109,13 +109,14 @@ impl VMPhysMem {
         let read_size = core::mem::size_of::<T>();
 
         if pa + read_size > self.size {
-            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, read_size))
-        } else {
-            Ok(unsafe {
-                let val_ptr = self.raw_data.offset(pa as isize) as *const T;
-                val_ptr.read()
-            })
+            return Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, read_size));
         }
+
+        let val = unsafe {
+            let val_ptr = self.raw_data.offset(pa as isize) as *const T;
+            val_ptr.read()
+        };
+        Ok(val)
     }
 
     /// Write a value to an address
@@ -124,46 +125,41 @@ impl VMPhysMem {
         let write_size = core::mem::size_of::<T>();
 
         if pa + write_size > self.size {
-            Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, write_size))
-        } else {
-            unsafe {
-                let val_ptr = self.raw_data.offset(pa as isize) as *mut T;
-                val_ptr.write(val);
-            }
-            Ok(())
+            return Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, write_size));
         }
+
+        unsafe {
+            let val_ptr = self.raw_data.offset(pa as isize) as *mut T;
+            val_ptr.write(val);
+        };
+        Ok(())
     }
 
     /// Read bytes from an address
     #[inline]
     pub fn read(&self, pa: usize, output: &mut [u8]) -> Result<()> {
-        assert!(pa + output.len() <= self.size);
-
         if pa + output.len() > self.size {
-            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, output.len()))
-        } else {
-            let pdata = unsafe {
-                std::slice::from_raw_parts(self.raw_data.offset(pa as isize), output.len())
-            };
-
-            output.copy_from_slice(pdata);
-            Ok(())
+            return Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, output.len()));
         }
+
+        let pdata =
+            unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), output.len()) };
+        output.copy_from_slice(pdata);
+        Ok(())
     }
 
     /// Write bytes to an address
     #[inline]
     pub fn write(&mut self, pa: usize, input: &[u8]) -> Result<()> {
         if pa + input.len() > self.size {
-            Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, input.len()))
-        } else {
-            let pdata = unsafe {
-                std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), input.len())
-            };
-
-            pdata.copy_from_slice(input);
-            Ok(())
+            return Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, input.len()));
         }
+
+        let pdata = unsafe {
+            std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), input.len())
+        };
+        pdata.copy_from_slice(input);
+        Ok(())
     }
 }
 
@@ -239,16 +235,17 @@ impl VMMemory {
             return Err(VMMemoryError::AddressAlreadyMapped(addr.address()));
         }
 
-        if let Some(frame) = self.pmem.allocate_frame() {
-            // Set p1 entry
-            p1.entries[addr.p1_index()].set_address(frame as u64);
-            p1.entries[addr.p1_index()].set_writable(true);
-            p1.entries[addr.p1_index()].set_present(true);
+        let frame = self
+            .pmem
+            .allocate_frame()
+            .ok_or(VMMemoryError::OutOfMemory)?;
 
-            Ok(())
-        } else {
-            Err(VMMemoryError::OutOfMemory)
-        }
+        // Set p1 entry
+        p1.entries[addr.p1_index()].set_address(frame as u64);
+        p1.entries[addr.p1_index()].set_writable(true);
+        p1.entries[addr.p1_index()].set_present(true);
+
+        Ok(())
     }
 
     /// Map virtual memory area
@@ -296,11 +293,9 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page);
-
-            if pa.is_none() {
-                return Err(VMMemoryError::AddressUnmapped(page.address()));
-            }
+            let pa = self
+                .get_page_pa(page)
+                .ok_or(VMMemoryError::AddressUnmapped(page.address()))?;
 
             let remaining_bytes = (output.len() - index) as u64;
             let page_bytes = PAGE_SIZE as u64 - page_off;
@@ -308,7 +303,7 @@ impl VMMemory {
 
             // Partial read into the slice
             self.pmem.read(
-                pa.unwrap() + page_off as usize,
+                pa + page_off as usize,
                 &mut output[index..index + bytes_to_copy as usize],
             )?;
 
@@ -333,11 +328,9 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self.get_page_pa(page);
-
-            if pa.is_none() {
-                return Err(VMMemoryError::AddressUnmapped(page.address()));
-            }
+            let pa = self
+                .get_page_pa(page)
+                .ok_or(VMMemoryError::AddressUnmapped(page.address()))?;
 
             let remaining_bytes = (input.len() - index) as u64;
             let page_bytes = PAGE_SIZE as u64 - page_off;
@@ -345,7 +338,7 @@ impl VMMemory {
 
             // Partial write from the slice
             self.pmem.write(
-                pa.unwrap() + page_off as usize,
+                pa + page_off as usize,
                 &input[index..index + bytes_to_copy as usize],
             )?;
 
