@@ -1,9 +1,61 @@
 //! Memory management
 
 use std::cmp::min;
+use std::{error, fmt};
 
 use bits::Alignement;
 use paging::{self, FrameAllocator, PageTable, VirtAddr, VirtRange};
+
+type Result<T> = std::result::Result<T, VMMemoryError>;
+
+#[derive(Debug)]
+pub enum VMMemoryError {
+    OutOfMemory,
+    AddressAlreadyMapped(u64),
+    AddressUnmapped(u64),
+    PhysReadOutOfBounds(u64, usize),
+    PhysWriteOutOfBounds(u64, usize),
+}
+
+impl fmt::Display for VMMemoryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            VMMemoryError::OutOfMemory => write!(f, "Out of memory"),
+            VMMemoryError::AddressAlreadyMapped(addr) => {
+                write!(f, "Virtual address already mapped 0x{:x}", addr)
+            }
+            VMMemoryError::PhysReadOutOfBounds(addr, len) => {
+                write!(
+                    f,
+                    "Physical read out of bounds 0x{:x} (len 0x{:x})",
+                    addr, len
+                )
+            }
+            VMMemoryError::PhysWriteOutOfBounds(addr, len) => {
+                write!(
+                    f,
+                    "Physical write out of bounds 0x{:x} (len 0x{:x})",
+                    addr, len
+                )
+            }
+            VMMemoryError::AddressUnmapped(addr) => {
+                write!(f, "Trying to access unmapped address: 0x{:x}", addr)
+            }
+        }
+    }
+}
+
+impl error::Error for VMMemoryError {
+    fn description(&self) -> &str {
+        match *self {
+            VMMemoryError::OutOfMemory => "Out of memory",
+            VMMemoryError::AddressAlreadyMapped(_) => "Virtual address already exists",
+            VMMemoryError::PhysReadOutOfBounds(_, _) => "Physical read out of bounds",
+            VMMemoryError::PhysWriteOutOfBounds(_, _) => "Physical write out of bounds",
+            VMMemoryError::AddressUnmapped(_) => "Tried to access unmapped memory",
+        }
+    }
+}
 
 /// Virtual machine physical memory
 pub struct VMPhysMem {
@@ -69,25 +121,34 @@ impl VMPhysMem {
 
     /// Read bytes from an address
     #[inline]
-    pub fn read(&self, pa: usize, output: &mut [u8]) {
+    pub fn read(&self, pa: usize, output: &mut [u8]) -> Result<()> {
         assert!(pa + output.len() <= self.size);
 
-        let pdata =
-            unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), output.len()) };
+        if pa + output.len() > self.size {
+            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, output.len()))
+        } else {
+            let pdata = unsafe {
+                std::slice::from_raw_parts(self.raw_data.offset(pa as isize), output.len())
+            };
 
-        output.copy_from_slice(pdata);
+            output.copy_from_slice(pdata);
+            Ok(())
+        }
     }
 
     /// Write bytes to an address
     #[inline]
-    pub fn write(&mut self, pa: usize, input: &[u8]) {
-        assert!(pa + input.len() <= self.size);
+    pub fn write(&mut self, pa: usize, input: &[u8]) -> Result<()> {
+        if pa + input.len() > self.size {
+            Err(VMMemoryError::PhysWriteOutOfBounds(pa as u64, input.len()))
+        } else {
+            let pdata = unsafe {
+                std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), input.len())
+            };
 
-        let pdata = unsafe {
-            std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), input.len())
-        };
-
-        pdata.copy_from_slice(input);
+            pdata.copy_from_slice(input);
+            Ok(())
+        }
     }
 }
 
@@ -153,24 +214,30 @@ impl VMMemory {
     }
 
     /// Map a page to a frame
-    fn map_page(&mut self, addr: VirtAddr) {
+    fn map_page(&mut self, addr: VirtAddr) -> Result<()> {
         let p4 = PageTable::from_addr(self.pmem.raw_data as usize);
         let p3 = p4.next_table_create(addr.p4_index(), &mut self.pmem);
         let p2 = p3.next_table_create(addr.p3_index(), &mut self.pmem);
         let p1 = p2.next_table_create(addr.p2_index(), &mut self.pmem);
 
-        assert!(p1.entries[addr.p1_index()].unused(), "Page already mapped");
+        if !p1.entries[addr.p1_index()].unused() {
+            return Err(VMMemoryError::AddressAlreadyMapped(addr.address()));
+        }
 
-        let frame = self.pmem.allocate_frame().expect("Could not allocate page");
+        if let Some(frame) = self.pmem.allocate_frame() {
+            // Set p1 entry
+            p1.entries[addr.p1_index()].set_address(frame as u64);
+            p1.entries[addr.p1_index()].set_writable(true);
+            p1.entries[addr.p1_index()].set_present(true);
 
-        // Set p1 entry
-        p1.entries[addr.p1_index()].set_address(frame as u64);
-        p1.entries[addr.p1_index()].set_writable(true);
-        p1.entries[addr.p1_index()].set_present(true);
+            Ok(())
+        } else {
+            Err(VMMemoryError::OutOfMemory)
+        }
     }
 
     /// Map virtual memory area
-    pub fn mmap(&mut self, addr: u64, size: usize) {
+    pub fn mmap(&mut self, addr: u64, size: usize) -> Result<()> {
         // Compute pages range
         let start = VirtAddr::new(addr);
         assert!(start.aligned(), "Page address must be aligned");
@@ -180,8 +247,10 @@ impl VMMemory {
 
         // Loop through pages to map
         for page in pages {
-            self.map_page(page);
+            self.map_page(page)?;
         }
+
+        Ok(())
     }
 
     /// Returns the physical address of a page. Or nothing if the address is not mapped.
@@ -200,7 +269,7 @@ impl VMMemory {
     }
 
     /// Reads data from the virtual address space
-    pub fn read(&self, addr: u64, output: &mut [u8]) {
+    pub fn read(&self, addr: u64, output: &mut [u8]) -> Result<()> {
         // Compute the range of pages between VA and VA + read_size
         let start = VirtAddr::new(addr);
         let end = VirtAddr::new(addr + output.len() as u64);
@@ -212,9 +281,11 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self
-                .get_page_pa(page)
-                .expect("Trying to read from unmapped page");
+            let pa = self.get_page_pa(page);
+
+            if pa.is_none() {
+                return Err(VMMemoryError::AddressUnmapped(page.address()));
+            }
 
             let remaining_bytes = (output.len() - index) as u64;
             let page_bytes = PAGE_SIZE as u64 - page_off;
@@ -222,18 +293,20 @@ impl VMMemory {
 
             // Partial read into the slice
             self.pmem.read(
-                pa + page_off as usize,
+                pa.unwrap() + page_off as usize,
                 &mut output[index..index + bytes_to_copy as usize],
-            );
+            )?;
 
             // Update cursor
             page_off = 0;
             index += bytes_to_copy as usize;
         }
+
+        Ok(())
     }
 
     /// Writes data to the virtual address space
-    pub fn write(&mut self, addr: u64, input: &[u8]) {
+    pub fn write(&mut self, addr: u64, input: &[u8]) -> Result<()> {
         // Compute the range of pages between VA and VA + read_size
         let start = VirtAddr::new(addr);
         let end = VirtAddr::new(addr + input.len() as u64);
@@ -245,9 +318,11 @@ impl VMMemory {
         // Loop through pages to read
         for page in pages {
             // Get physical page for given VA
-            let pa = self
-                .get_page_pa(page)
-                .expect("Trying to write from unmapped page");
+            let pa = self.get_page_pa(page);
+
+            if pa.is_none() {
+                return Err(VMMemoryError::AddressUnmapped(page.address()));
+            }
 
             let remaining_bytes = (input.len() - index) as u64;
             let page_bytes = PAGE_SIZE as u64 - page_off;
@@ -255,14 +330,16 @@ impl VMMemory {
 
             // Partial write from the slice
             self.pmem.write(
-                pa + page_off as usize,
+                pa.unwrap() + page_off as usize,
                 &input[index..index + bytes_to_copy as usize],
-            );
+            )?;
 
             // Update cursor
             page_off = 0;
             index += bytes_to_copy as usize;
         }
+
+        Ok(())
     }
 }
 
