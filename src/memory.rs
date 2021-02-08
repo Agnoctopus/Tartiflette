@@ -217,8 +217,7 @@ impl VMMemory {
                 .expect("Trying to read from unmapped page");
 
             let remaining_bytes = (output.len() - index) as u64;
-            // TODO page.address() ? Sure ?
-            let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
+            let page_bytes = PAGE_SIZE as u64 - page_off;
             let bytes_to_copy = min(remaining_bytes, page_bytes);
 
             // Partial read into the slice
@@ -251,8 +250,7 @@ impl VMMemory {
                 .expect("Trying to write from unmapped page");
 
             let remaining_bytes = (input.len() - index) as u64;
-            // TODO page.address() ? Sure ?
-            let page_bytes = (page.address() + PAGE_SIZE as u64) - page_off;
+            let page_bytes = PAGE_SIZE as u64 - page_off;
             let bytes_to_copy = min(remaining_bytes, page_bytes);
 
             // Partial write from the slice
