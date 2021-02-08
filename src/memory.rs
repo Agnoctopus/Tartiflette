@@ -8,12 +8,18 @@ use paging::{self, FrameAllocator, PageTable, VirtAddr, VirtRange};
 
 type Result<T> = std::result::Result<T, VMMemoryError>;
 
-#[derive(Debug)]
+/// Error type on VM memory system
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VMMemoryError {
+    // No more memory present
     OutOfMemory,
+    // The `address` was already mapped
     AddressAlreadyMapped(u64),
+    // The `address` is not mapped
     AddressUnmapped(u64),
+    /// Physical out of bound access on a read at the `address` of `size`
     PhysReadOutOfBounds(u64, usize),
+    /// Physical out of bound access on a write at the `address` of `size`
     PhysWriteOutOfBounds(u64, usize),
 }
 
