@@ -227,15 +227,13 @@ impl VMMemory {
         // Create the physical memory manager
         let mut pmem = VMPhysMem::new(memory_size).expect("Could not allocate physical memory");
 
-        /// DEBUG CODE TO PUT PML4 ON NON ZERO ADDRESS
-        pmem.allocate_frame().unwrap();
         pmem.allocate_frame().unwrap();
 
         // Setup the page directory
         let page = pmem
             .allocate_frame()
             .expect("Could not allocate page directory");
-        pmem.write(page, &[0; PAGE_SIZE]);
+        pmem.write(page, &[0; PAGE_SIZE]).unwrap();
 
         Some(VMMemory {
             pmem: pmem,
@@ -245,7 +243,7 @@ impl VMMemory {
 
     /// Map a page to a frame
     fn map_page(&mut self, addr: VirtAddr, perms: PagePermissions) -> Result<()> {
-        let p4 = PageTable::from_addr(self.pmem.raw_data as usize);
+        let p4 = PageTable::from_addr(self.pmem.translate(self.page_directory));
         let p3 = p4.next_table_create(addr.p4_index(), &mut self.pmem, perms);
         let p2 = p3.next_table_create(addr.p3_index(), &mut self.pmem, perms);
         let p1 = p2.next_table_create(addr.p2_index(), &mut self.pmem, perms);
