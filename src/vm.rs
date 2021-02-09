@@ -1,12 +1,12 @@
 //! Virtual Machine system
 
-use kvm_bindings::{kvm_sregs, kvm_regs, kvm_segment};
+use kvm_bindings::{kvm_regs, kvm_segment, kvm_sregs};
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
 use libc;
 
-use crate::memory::{VMPhysMem, VMMemory};
+use crate::memory::{VMMemory, VMPhysMem};
 
 /// Temporary implementation
 pub struct Vm {
@@ -32,8 +32,7 @@ impl Vm {
             guest_phys_addr: memory.pmem.guest_address() as u64,
             memory_size: memory.pmem.size() as u64,
             userspace_addr: memory.pmem.host_address() as u64,
-            flags: 0
-            // flags: kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES,
+            flags: 0, // flags: kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES,
         };
 
         unsafe {
@@ -67,7 +66,7 @@ impl Vm {
             g: 1, /* 4KB granularity */
             avl: 0,
             unusable: 0,
-            padding: 0
+            padding: 0,
         };
 
         sregs.cs = seg;
@@ -99,7 +98,7 @@ impl Vm {
             vm: vm_fd,
             cpu: vm_vcpu_fd,
             memory: memory,
-            regs: Default::default()
+            regs: Default::default(),
         }
     }
 
@@ -108,7 +107,8 @@ impl Vm {
     /// pub fn reset(&mut self, other: &Vmm) {}
 
     /// Runs the virtual memory
-    pub fn run(&mut self) /* -> Some kind of Vm exit */ {
+    pub fn run(&mut self) /* -> Some kind of Vm exit */
+    {
         // 1) Set registers for the VM (effectively reset the kernel object) + rflags second bit must be set
         // 2) Execute code
         let mut regs: kvm_regs = Default::default();

@@ -33,11 +33,11 @@ const ASM_BYTES: &[u8] = &[
 
 const ASM_64_SHELLCODE: &[u8] = &[
     0x48, 0x01, 0xc2, // add rdx, rax
-    0xcc // int3
+    0xcc, // int3
 ];
 
-use vm::Vm;
 use paging::PagePermissions;
+use vm::Vm;
 
 fn run() {
     // Instantiate KVM
@@ -47,8 +47,10 @@ fn run() {
     let mut vm_mem =
         memory::VMMemory::new(512 * paging::PAGE_SIZE).expect("Could not allocate Vm memory");
 
-    vm_mem.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE).unwrap();
-    vm_mem.write(0x1337000, ASM_64_SHELLCODE);
+    vm_mem
+        .mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)
+        .unwrap();
+    vm_mem.write(0x1337000, ASM_64_SHELLCODE).unwrap();
 
     let mut vm = Vm::new(&kvm, vm_mem);
     vm.run();
