@@ -22,16 +22,23 @@ pub trait FrameAllocator {
 }
 
 /// Page permissions
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct PagePermissions(usize);
 
 impl PagePermissions {
     // The page is readable
-    pub const READ: usize = 0;
+    pub const READ: PagePermissions = PagePermissions(0);
     // The page is writable
-    pub const WRITE: usize = 1;
+    pub const WRITE: PagePermissions = PagePermissions(1);
     // The page is executable
-    pub const EXECUTE: usize = 2;
+    pub const EXECUTE: PagePermissions = PagePermissions(2);
+
+    // Readble bit field
+    const READ_BIT: usize = 0;
+    // Writable bit field
+    const WRITE_BIT: usize = 1;
+    // Executable bit field
+    const EXECUTE_BIT: usize = 2;
 
     /// Creates a new PagePermissions object
     pub fn new(flags: usize) -> PagePermissions {
@@ -41,37 +48,53 @@ impl PagePermissions {
     /// Gets the read permission status
     #[inline]
     pub fn readable(&self) -> bool {
-        self.0.is_bit_set(Self::READ)
+        self.0.is_bit_set(Self::READ_BIT)
     }
 
     /// Sets the read permission status
     #[inline]
     pub fn set_readable(&mut self, readable: bool) {
-        self.0.set_bit(Self::READ, readable)
+        self.0.set_bit(Self::READ_BIT, readable)
     }
 
     /// Gets the write permission status
     #[inline]
     pub fn writable(&self) -> bool {
-        self.0.is_bit_set(Self::WRITE)
+        self.0.is_bit_set(Self::WRITE_BIT)
     }
 
     /// Sets the write permission status
     #[inline]
     pub fn set_writable(&mut self, writable: bool) {
-        self.0.set_bit(Self::WRITE, writable)
+        self.0.set_bit(Self::WRITE_BIT, writable)
     }
 
     /// Gets the execute permission status
     #[inline]
     pub fn executable(&self) -> bool {
-        self.0.is_bit_set(Self::EXECUTE)
+        self.0.is_bit_set(Self::EXECUTE_BIT)
     }
 
     /// Sets the execute permission status
     #[inline]
     pub fn set_executable(&mut self, executable: bool) {
-        self.0.set_bit(Self::EXECUTE, executable)
+        self.0.set_bit(Self::EXECUTE_BIT, executable)
+    }
+}
+
+impl core::ops::BitOr<PagePermissions> for PagePermissions {
+    type Output = Self;
+
+    #[inline]
+    fn bitor(self, rhs: PagePermissions) -> Self::Output {
+        Self::new(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign<PagePermissions> for PagePermissions {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: PagePermissions) {
+        *self = *self | rhs;
     }
 }
 

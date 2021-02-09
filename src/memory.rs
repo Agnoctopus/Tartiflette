@@ -4,7 +4,7 @@ use std::cmp::min;
 use std::{error, fmt};
 
 use bits::Alignement;
-use paging::{self, FrameAllocator, PageTable, PagePermissions, VirtAddr, VirtRange};
+use paging::{self, FrameAllocator, PagePermissions, PageTable, VirtAddr, VirtRange};
 
 type Result<T> = std::result::Result<T, VMMemoryError>;
 
@@ -371,12 +371,12 @@ impl VMMemory {
 #[cfg(test)]
 mod tests {
     use super::{VMMemory, PAGE_SIZE};
-    use paging::{VirtAddr, PagePermissions};
+    use paging::{PagePermissions, VirtAddr};
 
     #[test]
     fn test_alloc_single() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
-        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+        let perms = PagePermissions::READ | PagePermissions::WRITE;
 
         vm.mmap(0x1337000, PAGE_SIZE, perms);
     }
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_alloc_multiple() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
-        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+        let perms = PagePermissions::READ | PagePermissions::WRITE;
 
         vm.mmap(0x1337000, PAGE_SIZE * 1, perms);
         vm.mmap(0x1000, PAGE_SIZE * 1, perms);
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn test_write_simple() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
-        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+        let perms = PagePermissions::READ | PagePermissions::WRITE;
 
         vm.mmap(0x1337000, PAGE_SIZE, perms);
 
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn test_write_cross_page() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
-        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+        let perms = PagePermissions::READ | PagePermissions::WRITE;
 
         vm.mmap(0x1337000, PAGE_SIZE * 2, perms);
 
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn test_write_huge() {
         let mut vm = VMMemory::new(6 * PAGE_SIZE).expect("Could not allocate Vm memory");
-        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+        let perms = PagePermissions::READ | PagePermissions::WRITE;
 
         vm.mmap(0x1338000, PAGE_SIZE, perms);
         vm.mmap(0x1337000, PAGE_SIZE, perms);
