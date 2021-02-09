@@ -1,112 +1,95 @@
 //! Virtual Machine system
 
-use kvm_bindings;
+use kvm_bindings::{kvm_sregs, kvm_regs};
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
 use libc;
 
-use crate::memory::VMPhysMem;
+use crate::memory::{VMPhysMem, VMMemory};
 
-/// Virtual machine
-pub struct VM {
-    vm_fd: VmFd,
+/// Temporary implementation
+pub struct Vm {
+    /// kvm vm file descriptor
+    vm: VmFd,
+    /// VM cpu
+    cpu: VcpuFd,
+    /// VM virtual memory
+    memory: VMMemory,
+    /// General purpose registers used for the run
+    regs: kvm_regs,
 }
 
-impl VM {
-    /// Create a new `VM` instance
-    pub fn new(kvm: &Kvm) -> Self {
-        let vm_fd = kvm.create_vm().expect("Failed to create a VM");
+impl Vm {
+    pub fn new(kvm: &Kvm, memory: VMMemory) -> Vm {
+        // Create the vm file descriptor
+        let vm_fd = kvm.create_vm().expect("Could not create vm");
+        let vm_vcpu_fd = vm_fd.create_vcpu(0).expect("Could not create vm vcpu");
 
-        Self { vm_fd: vm_fd }
-    }
-
-    /// Return the `VmFd`
-    pub fn vm_fd(&self) -> &VmFd {
-        &self.vm_fd
-    }
-
-    /// Initialize the guest memory
-    pub fn memory_init(&self, pmem: &VMPhysMem) {
-        let slot = 0;
+        // Set the vm memory
         let mem_region = kvm_bindings::kvm_userspace_memory_region {
-            slot,
-            guest_phys_addr: pmem.guest_address() as u64,
-            memory_size: pmem.size() as u64,
-            userspace_addr: pmem.host_address() as u64,
+            slot: 0,
+            guest_phys_addr: memory.pmem.guest_address() as u64,
+            memory_size: memory.pmem.size() as u64,
+            userspace_addr: memory.pmem.host_address() as u64,
             flags: kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES,
         };
+
         unsafe {
-            self.vm_fd
+            vm_fd
                 .set_user_memory_region(mem_region)
                 .expect("Failed to set user memory region")
         };
-    }
 
-    /// Return the number of pages dirtied
-    pub fn pages_dirtied(&self, pmem: &VMPhysMem) -> usize {
-        let slot = 0;
-        let dirty_pages_bitmap = self.vm_fd.get_dirty_log(slot, pmem.size()).unwrap();
-        let dirty_pages = dirty_pages_bitmap
-            .into_iter()
-            .map(|page| page.count_ones())
-            .fold(0, |dirty_page_count, i| dirty_page_count + i as usize);
-        dirty_pages
-    }
-}
+        // Initialize system registers
+        const CR0_PG: u64 = 1 << 31;
+        const CR0_PE: u64 = 1 << 0;
+        const CR4_PAE: u64 = 1 << 5;
+        const IA32_EFER_LME: u64 = 1 << 8;
+        const IA32_EFER_LMA: u64 = 1 << 10;
+        const IA32_EFER_NXE: u64 = 1 << 11;
 
-/// Virtual CPU
-pub struct VCPU {
-    vcpu_fd: VcpuFd,
-    id: u8,
-}
+        let mut sregs: kvm_sregs = Default::default();
 
-impl VCPU {
-    /// Create a new `VCPU` instance
-    pub fn new(vm_fd: &VmFd, id: u8) -> Self {
-        let vcpu_fd = vm_fd.create_vcpu(id).expect("Failed to create a VCPU");
+        // 64 bits code segment
+        sregs.cs.l = 1;
+        // Paging enable and paging
+        sregs.cr0 = CR0_PE | CR0_PG;
+        // Physical address extension (necessary for x64)
+        sregs.cr4 = CR4_PAE;
+        // Sets x64 mode enabled (LME), active (LMA), and executable disable bit support (NXE)
+        sregs.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
+        // Sets the page table root address
+        sregs.cr3 = memory.pmem.guest_address() as u64;
 
-        Self {
-            vcpu_fd: vcpu_fd,
-            id: id,
+        vm_vcpu_fd.set_sregs(&sregs).unwrap();
+
+        Vm {
+            vm: vm_fd,
+            cpu: vm_vcpu_fd,
+            memory: memory,
+            regs: Default::default()
         }
     }
 
-    /// Configure the `VCPU`
-    pub fn configure(&self, entry: u64) {
-        let mut vcpu_sregs = self.vcpu_fd.get_sregs().unwrap();
-        vcpu_sregs.cs.base = 0;
-        vcpu_sregs.cs.selector = 0;
-        self.vcpu_fd.set_sregs(&vcpu_sregs).unwrap();
+    /// Resets the vm
+    /// Problem: - We need differential reset from a bitmap (should we collect it from kvm ?)
+    /// pub fn reset(&mut self, other: &Vmm) {}
 
-        let mut vcpu_regs = self.vcpu_fd.get_regs().unwrap();
-        vcpu_regs.rip = entry as u64;
-        vcpu_regs.rflags = 2;
-        self.vcpu_fd.set_regs(&vcpu_regs).unwrap();
-    }
+    /// Runs the virtual memory
+    pub fn run(&mut self) /* -> Some kind of Vm exit */ {
+        // 1) Set registers for the VM (effectively reset the kernel object) + rflags second bit must be set
+        // 2) Execute code
+        let mut regs: kvm_regs = Default::default();
+        regs.rip = 0x1337000;
+        regs.rax = 0x1000;
+        regs.rdx = 0x337;
+        regs.rflags = 2;
 
-    /// Run
-    pub fn run(&self) {
-        loop {
-            match self.vcpu_fd.run().expect("run failed") {
-                VcpuExit::IoIn(addr, data) => {
-                    println!("[I/O in    ] Address: {:#08x} Data: {:#x}", addr, data[0]);
-                }
-                VcpuExit::IoOut(addr, _data) => {
-                    println!("[I/O out   ] Address: {:#08x}", addr);
-                }
-                VcpuExit::MmioRead(addr, _data) => {
-                    println!("[MMIO read ] Address: {:#08x}", addr);
-                }
-                VcpuExit::MmioWrite(addr, data) => {
-                    println!("[MMIO write] Address: {:#08x} Data: {:#x}", addr, data[0]);
-                }
-                VcpuExit::Hlt => {
-                    println!("[Halted    ]",);
-                    break;
-                }
-                r => panic!("Unexpected exit reason: {:?}", r),
-            }
+        self.cpu.set_regs(&regs).unwrap();
+
+        match self.cpu.run().expect("run failed") {
+            exit_reason => panic!("exit reason: {:?}", exit_reason),
         }
     }
 }
