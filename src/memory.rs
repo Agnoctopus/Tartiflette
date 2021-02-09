@@ -85,7 +85,7 @@ impl VMPhysMem {
                 core::ptr::null_mut(),
                 size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
+                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_NORESERVE,
                 -1,
                 0,
             ) as *mut u8

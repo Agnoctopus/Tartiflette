@@ -17,8 +17,6 @@ extern crate libc;
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
-const MEM_SIZE: usize = 0x4000;
-const GUEST_ADDRESS: usize = 0x1000;
 const ASM_BYTES: &[u8] = &[
     0xba, 0xf8, 0x03, // mov dx, 0x3f8
     0x30, 0xc0, // xor al, al
@@ -42,6 +40,7 @@ use vm::Vm;
 fn run() {
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
+    assert!(kvm.get_api_version() >= 12);
 
     // Setup physical memory
     let mut vm_mem =
