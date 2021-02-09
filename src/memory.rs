@@ -227,6 +227,10 @@ impl VMMemory {
         // Create the physical memory manager
         let mut pmem = VMPhysMem::new(memory_size).expect("Could not allocate physical memory");
 
+        /// DEBUG CODE TO PUT PML4 ON NON ZERO ADDRESS
+        pmem.allocate_frame().unwrap();
+        pmem.allocate_frame().unwrap();
+
         // Setup the page directory
         let page = pmem
             .allocate_frame()
@@ -365,6 +369,10 @@ impl VMMemory {
         }
 
         Ok(())
+    }
+
+    pub fn page_directory(&self) -> usize {
+        self.page_directory
     }
 }
 

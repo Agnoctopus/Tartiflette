@@ -43,7 +43,7 @@ fn run() {
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
 
-    // Setup a physical memory
+    // Setup physical memory
     let mut vm_mem =
         memory::VMMemory::new(512 * paging::PAGE_SIZE).expect("Could not allocate Vm memory");
 
