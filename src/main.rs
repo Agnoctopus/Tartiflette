@@ -31,23 +31,27 @@ const ASM_BYTES: &[u8] = &[
     0xf4, // hlt
 ];
 
+const ASM_64_SHELLCODE: &[u8] = &[
+    0x48, 0x01, 0xc2, // add rdx, rax
+    0xcc // int3
+];
+
+use vm::Vm;
+use paging::PagePermissions;
+
 fn run() {
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
 
     // Setup a physical memory
     let mut vm_mem =
-        memory::VMMemory::new(4 * paging::PAGE_SIZE).expect("Could not allocate Vm memory");
-    vm_mem.pmem.write(0x1000, ASM_BYTES);
+        memory::VMMemory::new(512 * paging::PAGE_SIZE).expect("Could not allocate Vm memory");
 
-    // Create a vm
-    let vm = vm::VM::new(&kvm);
-    vm.memory_init(&vm_mem.pmem);
+    vm_mem.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE).unwrap();
+    vm_mem.write(0x1337000, ASM_64_SHELLCODE);
 
-    let vcpu = vm::VCPU::new(vm.vm_fd(), 0);
-    vcpu.configure(0x1000);
-    vcpu.run();
-    assert!(vm.pages_dirtied(&vm_mem.pmem) == 1);
+    let mut vm = Vm::new(&kvm, vm_mem);
+    vm.run();
 }
 
 /// Main function
