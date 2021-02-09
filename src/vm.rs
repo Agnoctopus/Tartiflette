@@ -1,6 +1,6 @@
 //! Virtual Machine system
 
-use kvm_bindings::{kvm_sregs, kvm_regs};
+use kvm_bindings::{kvm_sregs, kvm_regs, kvm_segment};
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
@@ -32,7 +32,8 @@ impl Vm {
             guest_phys_addr: memory.pmem.guest_address() as u64,
             memory_size: memory.pmem.size() as u64,
             userspace_addr: memory.pmem.host_address() as u64,
-            flags: kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES,
+            flags: 0
+            // flags: kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES,
         };
 
         unsafe {
@@ -44,6 +45,7 @@ impl Vm {
         // Initialize system registers
         const CR0_PG: u64 = 1 << 31;
         const CR0_PE: u64 = 1 << 0;
+        const CR0_ET: u64 = 1 << 4;
         const CR4_PAE: u64 = 1 << 5;
         const IA32_EFER_LME: u64 = 1 << 8;
         const IA32_EFER_LMA: u64 = 1 << 10;
@@ -52,17 +54,46 @@ impl Vm {
         let mut sregs: kvm_sregs = Default::default();
 
         // 64 bits code segment
-        sregs.cs.l = 1;
+        let mut seg = kvm_segment {
+            base: 0,
+            limit: 0xffffffff,
+            selector: 1 << 3,
+            present: 1,
+            type_: 11, /* Code: execute, read, accessed */
+            dpl: 0,
+            db: 0,
+            s: 1, /* Code/data */
+            l: 1,
+            g: 1, /* 4KB granularity */
+            avl: 0,
+            unusable: 0,
+            padding: 0
+        };
+
+        sregs.cs = seg;
+
+        seg.selector = 2 << 3;
+        seg.type_ = 3;
+
+        sregs.ds = seg;
+        sregs.es = seg;
+        sregs.fs = seg;
+        sregs.gs = seg;
+        sregs.ss = seg;
+
         // Paging enable and paging
-        sregs.cr0 = CR0_PE | CR0_PG;
+        sregs.cr0 = CR0_PE | CR0_PG | CR0_ET;
         // Physical address extension (necessary for x64)
         sregs.cr4 = CR4_PAE;
         // Sets x64 mode enabled (LME), active (LMA), and executable disable bit support (NXE)
         sregs.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
         // Sets the page table root address
-        sregs.cr3 = memory.pmem.guest_address() as u64;
+        sregs.cr3 = memory.page_directory() as u64;
 
         vm_vcpu_fd.set_sregs(&sregs).unwrap();
+
+        // Set tss
+        vm_fd.set_tss_address(0xfffb_d000).unwrap();
 
         Vm {
             vm: vm_fd,
