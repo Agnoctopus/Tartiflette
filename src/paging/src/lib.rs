@@ -21,6 +21,60 @@ pub trait FrameAllocator {
     fn translate(&self, frame_address: usize) -> usize;
 }
 
+/// Page permissions
+#[derive(Copy, Clone)]
+pub struct PagePermissions(usize);
+
+impl PagePermissions {
+    // The page is readable
+    pub const READ: usize = 0;
+    // The page is writable
+    pub const WRITE: usize = 1;
+    // The page is executable
+    pub const EXECUTE: usize = 2;
+
+    /// Creates a new PagePermissions object
+    pub fn new(flags: usize) -> PagePermissions {
+        PagePermissions(flags)
+    }
+
+    /// Gets the read permission status
+    #[inline]
+    pub fn readable(&self) -> bool {
+        self.0.is_bit_set(Self::READ)
+    }
+
+    /// Sets the read permission status
+    #[inline]
+    pub fn set_readable(&mut self, readable: bool) {
+        self.0.set_bit(Self::READ, readable)
+    }
+
+    /// Gets the write permission status
+    #[inline]
+    pub fn writable(&self) -> bool {
+        self.0.is_bit_set(Self::WRITE)
+    }
+
+    /// Sets the write permission status
+    #[inline]
+    pub fn set_writable(&mut self, writable: bool) {
+        self.0.set_bit(Self::WRITE, writable)
+    }
+
+    /// Gets the execute permission status
+    #[inline]
+    pub fn executable(&self) -> bool {
+        self.0.is_bit_set(Self::EXECUTE)
+    }
+
+    /// Sets the execute permission status
+    #[inline]
+    pub fn set_executable(&mut self, executable: bool) {
+        self.0.set_bit(Self::EXECUTE, executable)
+    }
+}
+
 /// Page Table
 #[repr(align(4096))]
 #[derive(Debug)]
@@ -81,6 +135,7 @@ impl PageTable {
         &mut self,
         entry_index: usize,
         allocator: &mut A,
+        perms: PagePermissions
     ) -> &mut PageTable {
         if self.next_table(entry_index, allocator).is_none() {
             assert!(!self.entries[entry_index].huge_page());
@@ -88,14 +143,25 @@ impl PageTable {
             let frame_address = allocator.allocate_frame().expect("Out of memory");
             self.entries[entry_index].set_address(frame_address as u64);
             self.entries[entry_index].set_present(true);
-            self.entries[entry_index].set_writable(true);
+
+            self.entries[entry_index].set_writable(perms.writable());
+            self.entries[entry_index].set_executable(perms.executable());
 
             let table = self.next_table(entry_index, allocator).unwrap();
             table.wipe();
+            table
         } else {
-            self.next_table(entry_index, allocator).unwrap();
+            // Merge directory permissions with page permissions
+            if perms.writable() && !self.entries[entry_index].writable() {
+                self.entries[entry_index].set_writable(true);
+            }
+
+            if perms.executable() && !self.entries[entry_index].executable() {
+                self.entries[entry_index].set_executable(true);
+            }
+
+            self.next_table(entry_index, allocator).unwrap()
         }
-        self.next_table(entry_index, allocator).unwrap()
     }
 
     /// Wipe a `PageTable`

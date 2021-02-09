@@ -4,7 +4,7 @@ use std::cmp::min;
 use std::{error, fmt};
 
 use bits::Alignement;
-use paging::{self, FrameAllocator, PageTable, VirtAddr, VirtRange};
+use paging::{self, FrameAllocator, PageTable, PagePermissions, VirtAddr, VirtRange};
 
 type Result<T> = std::result::Result<T, VMMemoryError>;
 
@@ -240,11 +240,11 @@ impl VMMemory {
     }
 
     /// Map a page to a frame
-    fn map_page(&mut self, addr: VirtAddr) -> Result<()> {
+    fn map_page(&mut self, addr: VirtAddr, perms: PagePermissions) -> Result<()> {
         let p4 = PageTable::from_addr(self.pmem.raw_data as usize);
-        let p3 = p4.next_table_create(addr.p4_index(), &mut self.pmem);
-        let p2 = p3.next_table_create(addr.p3_index(), &mut self.pmem);
-        let p1 = p2.next_table_create(addr.p2_index(), &mut self.pmem);
+        let p3 = p4.next_table_create(addr.p4_index(), &mut self.pmem, perms);
+        let p2 = p3.next_table_create(addr.p3_index(), &mut self.pmem, perms);
+        let p1 = p2.next_table_create(addr.p2_index(), &mut self.pmem, perms);
 
         if !p1.entries[addr.p1_index()].unused() {
             return Err(VMMemoryError::AddressAlreadyMapped(addr.address()));
@@ -257,14 +257,16 @@ impl VMMemory {
 
         // Set p1 entry
         p1.entries[addr.p1_index()].set_address(frame as u64);
-        p1.entries[addr.p1_index()].set_writable(true);
         p1.entries[addr.p1_index()].set_present(true);
+
+        p1.entries[addr.p1_index()].set_writable(perms.writable());
+        p1.entries[addr.p1_index()].set_executable(perms.executable());
 
         Ok(())
     }
 
     /// Map virtual memory area
-    pub fn mmap(&mut self, addr: u64, size: usize) -> Result<()> {
+    pub fn mmap(&mut self, addr: u64, size: usize, perms: PagePermissions) -> Result<()> {
         // Compute pages range
         let start = VirtAddr::new(addr);
         assert!(start.aligned(), "Page address must be aligned");
@@ -274,7 +276,7 @@ impl VMMemory {
 
         // Loop through pages to map
         for page in pages {
-            self.map_page(page)?;
+            self.map_page(page, perms)?;
         }
 
         Ok(())
@@ -369,28 +371,31 @@ impl VMMemory {
 #[cfg(test)]
 mod tests {
     use super::{VMMemory, PAGE_SIZE};
-    use paging::VirtAddr;
+    use paging::{VirtAddr, PagePermissions};
 
     #[test]
     fn test_alloc_single() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
+        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
 
-        vm.mmap(0x1337000, PAGE_SIZE);
+        vm.mmap(0x1337000, PAGE_SIZE, perms);
     }
 
     #[test]
     fn test_alloc_multiple() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not create VmMemory");
+        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
 
-        vm.mmap(0x1337000, PAGE_SIZE * 1);
-        vm.mmap(0x1000, PAGE_SIZE * 1);
+        vm.mmap(0x1337000, PAGE_SIZE * 1, perms);
+        vm.mmap(0x1000, PAGE_SIZE * 1, perms);
     }
 
     #[test]
     fn test_write_simple() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
+        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
 
-        vm.mmap(0x1337000, PAGE_SIZE);
+        vm.mmap(0x1337000, PAGE_SIZE, perms);
 
         let magic: [u8; 4] = [0x41, 0x42, 0x43, 0x44];
         let mut magic_result: [u8; 4] = [0; 4];
@@ -404,7 +409,9 @@ mod tests {
     #[test]
     fn test_write_cross_page() {
         let mut vm = VMMemory::new(512 * PAGE_SIZE).expect("Could not allocate Vm memory");
-        vm.mmap(0x1337000, PAGE_SIZE * 2);
+        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+
+        vm.mmap(0x1337000, PAGE_SIZE * 2, perms);
 
         let magic: [u8; 4] = [0x41, 0x42, 0x43, 0x44];
         let mut magic_result: [u8; 4] = [0; 4];
@@ -418,8 +425,10 @@ mod tests {
     #[test]
     fn test_write_huge() {
         let mut vm = VMMemory::new(6 * PAGE_SIZE).expect("Could not allocate Vm memory");
-        vm.mmap(0x1338000, PAGE_SIZE);
-        vm.mmap(0x1337000, PAGE_SIZE);
+        let perms = PagePermissions::new(PagePermissions::READ | PagePermissions::WRITE);
+
+        vm.mmap(0x1338000, PAGE_SIZE, perms);
+        vm.mmap(0x1337000, PAGE_SIZE, perms);
 
         let magic: [u8; 2 * PAGE_SIZE] = [0x42; 2 * PAGE_SIZE];
         let mut magic_result: [u8; 2 * PAGE_SIZE] = [0u8; 2 * PAGE_SIZE];
