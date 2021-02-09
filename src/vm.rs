@@ -1,12 +1,12 @@
 //! Virtual Machine system
 
-use kvm_bindings::{kvm_regs, kvm_segment, kvm_sregs};
+use kvm_bindings::{kvm_regs, kvm_run, kvm_segment, kvm_sregs};
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use libc;
+use libc::{self, MAP_FAILED};
 
-use crate::memory::{VMMemory, VMPhysMem};
+use crate::memory::{self, VMMemory, VMPhysMem};
 
 /// Temporary implementation
 pub struct Vm {
@@ -45,12 +45,14 @@ impl Vm {
         const CR0_PG: u64 = 1 << 31;
         const CR0_PE: u64 = 1 << 0;
         const CR0_ET: u64 = 1 << 4;
+        const CR0_WP: u64 = 1 << 16;
+
         const CR4_PAE: u64 = 1 << 5;
         const IA32_EFER_LME: u64 = 1 << 8;
         const IA32_EFER_LMA: u64 = 1 << 10;
         const IA32_EFER_NXE: u64 = 1 << 11;
 
-        let mut sregs: kvm_sregs = Default::default();
+        let mut sregs: kvm_sregs = vm_vcpu_fd.get_sregs().unwrap();
 
         // 64 bits code segment
         let mut seg = kvm_segment {
@@ -81,7 +83,7 @@ impl Vm {
         sregs.ss = seg;
 
         // Paging enable and paging
-        sregs.cr0 = CR0_PE | CR0_PG | CR0_ET;
+        sregs.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
         // Physical address extension (necessary for x64)
         sregs.cr4 = CR4_PAE;
         // Sets x64 mode enabled (LME), active (LMA), and executable disable bit support (NXE)
@@ -90,7 +92,6 @@ impl Vm {
         sregs.cr3 = memory.page_directory() as u64;
 
         vm_vcpu_fd.set_sregs(&sregs).unwrap();
-
         // Set tss
         vm_fd.set_tss_address(0xfffb_d000).unwrap();
 

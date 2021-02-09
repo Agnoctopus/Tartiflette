@@ -26,11 +26,11 @@ pub trait FrameAllocator {
 pub struct PagePermissions(usize);
 
 impl PagePermissions {
-    // The page is readable
+    /// The page is readable
     pub const READ: PagePermissions = PagePermissions(0);
-    // The page is writable
+    /// The page is writable
     pub const WRITE: PagePermissions = PagePermissions(1);
-    // The page is executable
+    /// The page is executable
     pub const EXECUTE: PagePermissions = PagePermissions(2);
 
     // Readble bit field
