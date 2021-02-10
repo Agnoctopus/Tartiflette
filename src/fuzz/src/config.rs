@@ -45,24 +45,38 @@ impl TryFrom<&ArgMatches<'_>> for IOConfig {
 }
 
 #[derive(Debug)]
-pub struct ExeConfig {}
+pub struct ExeConfig {
+    pub cmdline: Option<Vec<String>>,
+}
 
 impl TryFrom<&ArgMatches<'_>> for ExeConfig {
     type Error = ConfigError;
 
     fn try_from(matches: &ArgMatches) -> Result<Self, Self::Error> {
-        Ok(Self {})
+        let cmdline = matches
+            .values_of("program")
+            .map(|vals| vals.map(String::from).collect::<Vec<_>>());
+
+        Ok(Self { cmdline: cmdline })
     }
 }
 
 #[derive(Debug)]
-pub struct AppConfig {}
+pub struct AppConfig {
+    pub minimize: bool,
+    pub verbose: u64,
+    pub jobs: usize,
+}
 
 impl TryFrom<&ArgMatches<'_>> for AppConfig {
     type Error = ConfigError;
 
     fn try_from(matches: &ArgMatches) -> Result<Self, Self::Error> {
-        Ok(Self {})
+        Ok(Self {
+            verbose: matches.occurrences_of("verbose"),
+            minimize: matches.is_present("minimize"),
+            jobs: matches.value_of("jobs").unwrap().parse::<usize>().unwrap(),
+        })
     }
 }
 

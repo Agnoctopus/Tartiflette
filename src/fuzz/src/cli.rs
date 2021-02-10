@@ -45,7 +45,7 @@ impl CLI {
                     .long("jobs")
                     .takes_value(true)
                     .default_value("1")
-                    .help("Number of concurrent threads"),
+                    .help("Number of concurrent jobs"),
             )
             .arg(
                 Arg::with_name("verbose")
@@ -53,6 +53,17 @@ impl CLI {
                     .long("verbose")
                     .multiple(true)
                     .help("Set verbose mode"),
+            )
+            .arg(
+                Arg::with_name("minimize")
+                    .long("minimize")
+                    .help("Minimize the corpus"),
+            )
+            .arg(
+                Arg::with_name("program")
+                    .multiple(true)
+                    .last(true)
+                    .help("Program command line"),
             );
 
         // Match the program args
@@ -62,8 +73,6 @@ impl CLI {
 
         // Create the program `Config`
         let config = Config::try_from(&matches).unwrap();
-        println!("{:#?}", config);
-
         Ok(config)
     }
 }
