@@ -19,7 +19,7 @@ use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
 const ASM_64_SHELLCODE: &[u8] = &[
     0x48, 0x01, 0xc2, // add rdx, rax
-    0xf4 // hlt
+    0xf4, // hlt
 ];
 
 use paging::PagePermissions;
