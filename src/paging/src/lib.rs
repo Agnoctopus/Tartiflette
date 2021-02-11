@@ -27,11 +27,11 @@ pub struct PagePermissions(usize);
 
 impl PagePermissions {
     /// The page is readable
-    pub const READ: PagePermissions = PagePermissions(0);
+    pub const READ: PagePermissions = PagePermissions(1 << 0);
     /// The page is writable
-    pub const WRITE: PagePermissions = PagePermissions(1);
+    pub const WRITE: PagePermissions = PagePermissions(1 << 1);
     /// The page is executable
-    pub const EXECUTE: PagePermissions = PagePermissions(2);
+    pub const EXECUTE: PagePermissions = PagePermissions(1 << 2);
 
     // Readble bit field
     const READ_BIT: usize = 0;
