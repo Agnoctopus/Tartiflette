@@ -227,8 +227,6 @@ impl VMMemory {
         // Create the physical memory manager
         let mut pmem = VMPhysMem::new(memory_size).expect("Could not allocate physical memory");
 
-        pmem.allocate_frame().unwrap();
-
         // Setup the page directory
         let page = pmem
             .allocate_frame()

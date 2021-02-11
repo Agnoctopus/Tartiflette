@@ -121,7 +121,11 @@ impl Vm {
         self.cpu.set_regs(&regs).unwrap();
 
         match self.cpu.run().expect("run failed") {
-            exit_reason => panic!("exit reason: {:?}", exit_reason),
+            exit_reason => println!("exit reason: {:?}", exit_reason),
         }
+
+        regs = self.cpu.get_regs().unwrap();
+
+        println!("regs: {:#x?}", regs);
     }
 }
