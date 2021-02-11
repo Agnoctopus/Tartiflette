@@ -17,21 +17,9 @@ extern crate libc;
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
-const ASM_BYTES: &[u8] = &[
-    0xba, 0xf8, 0x03, // mov dx, 0x3f8
-    0x30, 0xc0, // xor al, al
-    0x04, 0x42, // add al, 0x42
-    0xee, // out dx, al
-    0xec, // in  al, dx
-    0x8a, 0x16, 0x00, 0x80, // mov dl, [0x8000] (MMIO Read)
-    0xc6, 0x06, 0x00, 0x80, 0x42, // mov [0x8000], 0x42  (MMIO Write)
-    0xfa, // cli
-    0xf4, // hlt
-];
-
 const ASM_64_SHELLCODE: &[u8] = &[
     0x48, 0x01, 0xc2, // add rdx, rax
-    0xcc, // int3
+    0xf4 // hlt
 ];
 
 use paging::PagePermissions;
