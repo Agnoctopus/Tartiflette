@@ -1,6 +1,9 @@
 //! Virtual Machine system
 
-use kvm_bindings::{kvm_regs, kvm_run, kvm_segment, kvm_sregs};
+use kvm_bindings::{
+    kvm_guest_debug, kvm_regs, kvm_run, kvm_segment, kvm_sregs, KVM_GUESTDBG_ENABLE,
+    KVM_GUESTDBG_USE_SW_BP,
+};
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
@@ -73,7 +76,7 @@ impl Vm {
 
         sregs.cs = seg;
 
-        seg.selector = 2 << 3;
+        seg.selector = 0;
         seg.type_ = 3;
 
         sregs.ds = seg;
@@ -92,8 +95,18 @@ impl Vm {
         sregs.cr3 = memory.page_directory() as u64;
 
         vm_vcpu_fd.set_sregs(&sregs).unwrap();
+
         // Set tss
         vm_fd.set_tss_address(0xfffb_d000).unwrap();
+
+        // Enable vm exit on software breakpoints
+        let dregs = kvm_guest_debug {
+            control: KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP,
+            pad: 0,
+            arch: Default::default(),
+        };
+
+        vm_vcpu_fd.set_guest_debug(&dregs).unwrap();
 
         Vm {
             vm: vm_fd,
@@ -123,9 +136,5 @@ impl Vm {
         match self.cpu.run().expect("run failed") {
             exit_reason => println!("exit reason: {:?}", exit_reason),
         }
-
-        regs = self.cpu.get_regs().unwrap();
-
-        println!("regs: {:#x?}", regs);
     }
 }
