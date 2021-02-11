@@ -9,3 +9,7 @@ edition = "2018"
 [dependencies]
 clap = "2.33.3"
 chrono = "0.4.19"
+memmap = "0.7.0"
+getrandom = "0.2.2"
+md5 = "0.7.0"
+bits = { path = "../bits"}
