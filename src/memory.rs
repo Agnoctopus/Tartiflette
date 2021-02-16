@@ -13,6 +13,8 @@ type Result<T> = std::result::Result<T, VMMemoryError>;
 pub enum VMMemoryError {
     // No more memory present
     OutOfMemory,
+    // Could not allocate memory
+    PhysmemAlloc,
     // The `address` was already mapped
     AddressAlreadyMapped(u64),
     // The `address` is not mapped
@@ -27,6 +29,7 @@ impl fmt::Display for VMMemoryError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             VMMemoryError::OutOfMemory => write!(f, "Out of memory"),
+            VMMemoryError::PhysmemAlloc => write!(f, "Physmem mmap failed"),
             VMMemoryError::AddressAlreadyMapped(addr) => {
                 write!(f, "Virtual address already mapped 0x{:x}", addr)
             }
@@ -55,6 +58,7 @@ impl error::Error for VMMemoryError {
     fn description(&self) -> &str {
         match *self {
             VMMemoryError::OutOfMemory => "Out of memory",
+            VMMemoryError::PhysmemAlloc => "Physmem mmap failed",
             VMMemoryError::AddressAlreadyMapped(_) => "Virtual address already exists",
             VMMemoryError::PhysReadOutOfBounds(_, _) => "Physical read out of bounds",
             VMMemoryError::PhysWriteOutOfBounds(_, _) => "Physical write out of bounds",
@@ -75,7 +79,7 @@ pub struct VMPhysMem {
 
 impl VMPhysMem {
     /// Create a new instance of `VmPhysMem`
-    pub fn new(memory_size: usize) -> Option<Self> {
+    pub fn new(memory_size: usize) -> Result<Self> {
         // Align size
         let size = memory_size.align_power2(paging::PAGE_SIZE);
 
@@ -93,10 +97,10 @@ impl VMPhysMem {
 
         // Failed to mmap
         if raw_data.is_null() {
-            return None;
+            return Err(VMMemoryError::PhysmemAlloc);
         }
 
-        Some(Self {
+        Ok(Self {
             raw_data: raw_data,
             size: size,
             top: 0,
@@ -113,9 +117,34 @@ impl VMPhysMem {
         self.raw_data as usize
     }
 
-    /// Return the size of the region
+    /// Return the total size of the region
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Returns the amount of memory used inside the region
+    pub fn used(&self) -> usize {
+        self.top
+    }
+
+    pub fn raw_slice(&self, pa: usize, length: usize) -> Result<&[u8]> {
+        if pa + length > self.size() {
+            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, length))
+        } else {
+            Ok(unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) })
+        }
+    }
+
+    pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
+        if pa + length > self.size() {
+            Err(VMMemoryError::PhysReadOutOfBounds(pa as u64, length))
+        } else {
+            Ok(
+                unsafe {
+                    std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length)
+                },
+            )
+        }
     }
 
     /// Read a value from an address
@@ -176,6 +205,18 @@ impl VMPhysMem {
         pdata.copy_from_slice(input);
         Ok(())
     }
+
+    /// Returns a copy of the physical memory
+    pub fn clone(&self) -> Result<Self> {
+        let mut pmem = VMPhysMem::new(self.size)?;
+
+        // Copy old data
+        let old_data = self.raw_slice(0, self.size())?;
+        pmem.write(0, old_data)?;
+        pmem.top = self.top;
+
+        Ok(pmem)
+    }
 }
 
 /// Bump allocator
@@ -218,22 +259,22 @@ const PAGE_SIZE: usize = 0x1000;
 
 impl VMMemory {
     /// Create a new `VMMemory instance`
-    pub fn new(memory_size: usize) -> Option<VMMemory> {
+    pub fn new(memory_size: usize) -> Result<Self> {
         assert!(
             memory_size >= PAGE_SIZE,
             "Memory size must be at least a page"
         );
 
         // Create the physical memory manager
-        let mut pmem = VMPhysMem::new(memory_size).expect("Could not allocate physical memory");
+        let mut pmem = VMPhysMem::new(memory_size)?;
 
         // Setup the page directory
         let page = pmem
             .allocate_frame()
             .expect("Could not allocate page directory");
-        pmem.write(page, &[0; PAGE_SIZE]).unwrap();
+        pmem.write(page, &[0; PAGE_SIZE])?;
 
-        Some(VMMemory {
+        Ok(VMMemory {
             pmem: pmem,
             page_directory: page,
         })
@@ -369,6 +410,16 @@ impl VMMemory {
 
     pub fn page_directory(&self) -> usize {
         self.page_directory
+    }
+
+    /// Returns a copy of the VAS
+    pub fn clone(&self) -> Result<Self> {
+        let mut pmem = self.pmem.clone()?;
+
+        Ok(VMMemory {
+            pmem: pmem,
+            page_directory: self.page_directory,
+        })
     }
 }
 
