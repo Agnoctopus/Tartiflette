@@ -2,6 +2,7 @@ use super::paging::FrameAllocator;
 use super::MemoryError;
 use super::{Result, PAGE_SIZE};
 use crate::utils::bits::Alignement;
+use libc::MAP_FAILED;
 
 /// Virtual machine physical memory
 pub struct PhysicalMemory {
@@ -32,7 +33,7 @@ impl PhysicalMemory {
         };
 
         // Failed to mmap
-        if raw_data.is_null() {
+        if raw_data == MAP_FAILED as *mut u8 {
             return Err(MemoryError::PhysmemAlloc);
         }
 
