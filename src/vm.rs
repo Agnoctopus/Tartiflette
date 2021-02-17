@@ -7,10 +7,7 @@ use kvm_bindings::{
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use libc::{self, MAP_FAILED};
-use memory::VMMemoryError;
-
-use crate::memory::{self, VMMemory, VMPhysMem};
+use crate::memory::{MemoryError, VirtualMemory};
 
 type Result<T> = std::result::Result<T, VmError>;
 
@@ -18,7 +15,7 @@ type Result<T> = std::result::Result<T, VmError>;
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VmError {
     /// Memory subsystem error
-    Memory(VMMemoryError),
+    Memory(MemoryError),
     /// Kvm error
     Kvm(kvm_ioctls::Error),
 }
@@ -29,8 +26,8 @@ impl From<kvm_ioctls::Error> for VmError {
     }
 }
 
-impl From<VMMemoryError> for VmError {
-    fn from(err: VMMemoryError) -> VmError {
+impl From<MemoryError> for VmError {
+    fn from(err: MemoryError) -> VmError {
         VmError::Memory(err)
     }
 }
@@ -42,7 +39,7 @@ pub struct Vm {
     /// VM cpu
     cpu: VcpuFd,
     /// VM virtual memory
-    memory: VMMemory,
+    memory: VirtualMemory,
     /// General purpose registers used for the run
     regs: kvm_regs,
     /// Special purpose registers used for the run
@@ -50,7 +47,7 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn new(kvm: &Kvm, memory: VMMemory) -> Result<Vm> {
+    pub fn new(kvm: &Kvm, memory: VirtualMemory) -> Result<Vm> {
         // Create the vm file descriptor
         let vm_fd = kvm.create_vm()?;
         let vm_vcpu_fd = vm_fd.create_vcpu(0)?;
@@ -166,7 +163,7 @@ impl Vm {
                 if bm & (1 << bit_idx) != 0 {
                     println!("Restoring dirty frame 0x{:x}", pa);
 
-                    let orig_data = other.memory.pmem.raw_slice(pa, paging::PAGE_SIZE)?;
+                    let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
                     self.memory.pmem.write(pa, orig_data)?;
                 }
             }

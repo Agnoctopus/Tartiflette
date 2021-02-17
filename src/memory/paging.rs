@@ -1,10 +1,7 @@
 //! Paging management system
 
 #![warn(missing_docs)]
-#![no_std]
-
-extern crate bits;
-use crate::bits::BitField;
+use crate::utils::bits::BitField;
 
 use core::ops::Range;
 
@@ -158,7 +155,7 @@ impl PageTable {
         &mut self,
         entry_index: usize,
         allocator: &mut A,
-        perms: PagePermissions
+        perms: PagePermissions,
     ) -> &mut PageTable {
         if self.next_table(entry_index, allocator).is_none() {
             assert!(!self.entries[entry_index].huge_page());
@@ -431,7 +428,7 @@ pub struct VirtRange {
 
 impl VirtRange {
     /// Return a new instance of `VirtRange`
-    pub fn new(mut start: VirtAddr, mut end: VirtAddr) -> Self {
+    pub fn new(start: VirtAddr, end: VirtAddr) -> Self {
         Self {
             start: start,
             end: end,
