@@ -87,7 +87,7 @@ impl VirtualMemory {
     }
 
     /// Returns whether a given `VirtAddr` is mapped into the address space
-    fn is_mapped(&self, address: VirtAddr) -> bool {
+    pub fn is_mapped(&self, address: VirtAddr) -> bool {
         self.get_page_pa(address).is_some()
     }
 
