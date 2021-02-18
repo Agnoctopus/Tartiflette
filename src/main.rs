@@ -4,8 +4,6 @@
 
 mod cli;
 mod config;
-mod memory;
-mod utils;
 mod vm;
 
 #[allow(unused)]

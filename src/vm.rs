@@ -7,7 +7,7 @@ use kvm_bindings::{
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use crate::memory::{MemoryError, VirtualMemory};
+use memory::{MemoryError, VirtualMemory};
 
 type Result<T> = std::result::Result<T, VmError>;
 

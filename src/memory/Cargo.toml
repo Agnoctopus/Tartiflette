@@ -1,0 +1,10 @@
+[package]
+name = "memory"
+version = "0.1.0"
+authors = ["César Belley <cesar.belley@lse.epita.fr>",
+           "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
+edition = "2018"
+
+[dependencies]
+libc = "0.2.85"
+bits = { path = "../bits" }
