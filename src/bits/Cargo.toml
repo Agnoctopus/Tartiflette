@@ -1,0 +1,7 @@
+[package]
+name = "bits"
+version = "0.1.0"
+authors = ["César Belley <cesar.belley@lse.epita.fr>"]
+edition = "2018"
+
+[dependencies]

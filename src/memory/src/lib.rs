@@ -1,10 +1,10 @@
-mod paging;
-mod phys;
-mod virt;
+pub mod paging;
+pub mod phys;
+pub mod virt;
 
 use std::{error, fmt};
 
-type Result<T> = std::result::Result<T, MemoryError>;
+pub type Result<T> = std::result::Result<T, MemoryError>;
 
 pub use paging::PagePermissions;
 pub use phys::PhysicalMemory;

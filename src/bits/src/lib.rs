@@ -1,6 +1,7 @@
 //! Bits manipulations utils
 
 #![warn(missing_docs)]
+#![no_std]
 
 use core::ops::{Bound, Range, RangeBounds};
 

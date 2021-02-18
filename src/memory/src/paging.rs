@@ -1,8 +1,7 @@
 //! Paging management system
 
 #![warn(missing_docs)]
-use crate::utils::bits::BitField;
-
+use bits::BitField;
 use core::ops::Range;
 
 /// Page size

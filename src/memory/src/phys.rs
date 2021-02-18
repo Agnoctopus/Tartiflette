@@ -1,7 +1,7 @@
 use super::paging::FrameAllocator;
 use super::MemoryError;
 use super::{Result, PAGE_SIZE};
-use crate::utils::bits::Alignement;
+use bits::Alignement;
 use libc::MAP_FAILED;
 
 /// Virtual machine physical memory
