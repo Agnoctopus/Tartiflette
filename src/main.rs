@@ -8,21 +8,20 @@ mod vm;
 
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
+use memory::{PagePermissions, VirtualMemory};
+use vm::Vm;
 
 const ASM_64_SHELLCODE: &[u8] = &[
     0x48, 0x01, 0xc2, // add rdx, rax
     0xcc, // breakpoint
 ];
 
-use memory::{PagePermissions, VirtualMemory};
-use vm::Vm;
-
 fn run() {
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
     assert!(kvm.get_api_version() >= 12);
 
-    // Setup physical memory
+    // Setup virtual memory
     let mut vm_mem = VirtualMemory::new(512 * 0x1000).expect("Could not allocate Vm memory");
 
     vm_mem
@@ -30,14 +29,16 @@ fn run() {
         .unwrap();
     vm_mem.write(0x1337000, ASM_64_SHELLCODE).unwrap();
 
+    // Setup virtual machine
     let mut vm = Vm::new(&kvm, vm_mem).unwrap();
 
     let mut regs = vm.get_initial_regs();
     regs.rip = 0x1337000;
     regs.rax = 0x1000;
     regs.rdx = 0x337;
-
     vm.set_initial_regs(regs);
+
+    // Run virtual machine
     match vm.run().expect("Run failed") {
         kvm_ioctls::VcpuExit::Debug => println!("Breakpoint hits !"),
         error_code => println!("Failed: {:?}", error_code),
