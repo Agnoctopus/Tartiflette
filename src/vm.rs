@@ -1,5 +1,6 @@
 //! Virtual Machine system
 
+use bits::BitField;
 use kvm_bindings::{
     kvm_guest_debug, kvm_regs, kvm_segment, kvm_sregs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP,
     KVM_MEM_LOG_DIRTY_PAGES,
@@ -135,11 +136,13 @@ impl Vm {
     }
 
     /// Sets up the registers that will be used as the vm starting state.
+    #[inline]
     pub fn set_initial_regs(&mut self, regs: kvm_regs) {
         self.regs = regs;
     }
 
     /// Gets the initial registers used for a reset.
+    #[inline]
     pub fn get_initial_regs(&self) -> kvm_regs {
         self.regs
     }
@@ -156,11 +159,13 @@ impl Vm {
         let used_mem = self.memory.pmem.used();
         let log = self.vm.get_dirty_log(0, used_mem)?;
 
+        // Loop through bitmap of pages dirtied
         for (bm_idx, bm) in log.into_iter().enumerate() {
-            for bit_idx in 0..8 {
-                let pa = (bm_idx * 8) + bit_idx;
+            for bit_idx in 0..64 {
+                if bm.is_bit_set(bit_idx) {
+                    let frame_index = (bm_idx * 64) + bit_idx;
+                    let pa = frame_index * 0x1000;
 
-                if bm & (1 << bit_idx) != 0 {
                     println!("Restoring dirty frame 0x{:x}", pa);
 
                     let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
