@@ -1,6 +1,7 @@
 //! Paging management system
 
 #![warn(missing_docs)]
+
 use bits::BitField;
 use core::ops::Range;
 
