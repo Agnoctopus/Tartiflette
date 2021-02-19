@@ -1,8 +1,9 @@
-use super::{
-    paging::{FrameAllocator, PagePermissions, PageTable, VirtAddr, VirtRange},
-    phys::PhysicalMemory,
-    MemoryError, Result, PAGE_SIZE,
-};
+//! Virtual Memory Subsystem
+
+use super::paging::{FrameAllocator, PagePermissions, PageTable, VirtAddr, VirtRange};
+use super::phys::PhysicalMemory;
+use super::{MemoryError, Result, PAGE_SIZE};
+
 use std::cmp::min;
 
 /// Virtual machine memory manager
@@ -161,11 +162,13 @@ impl VirtualMemory {
         Ok(())
     }
 
+    /// Returns the page directory virtual address
+    #[inline]
     pub fn page_directory(&self) -> usize {
         self.page_directory
     }
 
-    /// Returns a copy of the VAS
+    /// Returns a copy of the `VirtualMemory`
     pub fn clone(&self) -> Result<Self> {
         let pmem = self.pmem.clone()?;
 

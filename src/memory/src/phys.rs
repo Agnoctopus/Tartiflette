@@ -1,6 +1,9 @@
+//! Physical Memory Subsystem
+
 use super::paging::FrameAllocator;
 use super::MemoryError;
 use super::{Result, PAGE_SIZE};
+
 use bits::Alignement;
 use libc::MAP_FAILED;
 
@@ -45,43 +48,45 @@ impl PhysicalMemory {
     }
 
     /// Return the guest physical region start address
+    #[inline]
     pub fn guest_address(&self) -> usize {
         0
     }
 
     /// Return the host region start address
+    #[inline]
     pub fn host_address(&self) -> usize {
         self.raw_data as usize
     }
 
     /// Return the total size of the region
+    #[inline]
     pub fn size(&self) -> usize {
         self.size
     }
 
     /// Returns the amount of memory used inside the region
+    #[inline]
     pub fn used(&self) -> usize {
         self.top
     }
 
+    /// Returns a slice covering an asked area
     pub fn raw_slice(&self, pa: usize, length: usize) -> Result<&[u8]> {
         if pa + length > self.size() {
-            Err(MemoryError::PhysReadOutOfBounds(pa as u64, length))
-        } else {
-            Ok(unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) })
+            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
         }
+
+        Ok(unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) })
     }
 
+    /// Returns a mutable slice covering an asked area
     pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
         if pa + length > self.size() {
-            Err(MemoryError::PhysReadOutOfBounds(pa as u64, length))
-        } else {
-            Ok(
-                unsafe {
-                    std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length)
-                },
-            )
+            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
         }
+
+        Ok(unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) })
     }
 
     /// Read a value from an address

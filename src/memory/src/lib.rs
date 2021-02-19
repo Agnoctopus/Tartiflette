@@ -1,27 +1,33 @@
+//! Virtual Memory Library
+
+#![warn(missing_docs)]
+
 pub mod paging;
 pub mod phys;
 pub mod virt;
-
-use std::{error, fmt};
-
-pub type Result<T> = std::result::Result<T, MemoryError>;
 
 pub use paging::PagePermissions;
 pub use phys::PhysicalMemory;
 pub use virt::VirtualMemory;
 
+use std::{error, fmt};
+
+/// Result type
+pub type Result<T> = std::result::Result<T, MemoryError>;
+
+/// Page size
 pub const PAGE_SIZE: usize = 0x1000;
 
 /// Error type on VM memory system
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum MemoryError {
-    // No more memory present
+    /// No more memory present
     OutOfMemory,
-    // Could not allocate memory
+    /// Could not allocate memory
     PhysmemAlloc,
-    // The `address` was already mapped
+    /// The `address` was already mapped
     AddressAlreadyMapped(u64),
-    // The `address` is not mapped
+    /// The `address` is not mapped
     AddressUnmapped(u64),
     /// Physical out of bound access on a read at the `address` of `size`
     PhysReadOutOfBounds(u64, usize),
