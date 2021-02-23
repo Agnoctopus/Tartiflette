@@ -30,7 +30,7 @@ pub enum VmExit {
     /// Stopped on a debug instruction that it not coverage.
     Breakpoint(u64),
     /// Raw vmexit unhandled by tartiflette
-    Unhandled(u64)
+    Unhandled(u64),
 }
 
 impl From<kvm_ioctls::Error> for VmError {
@@ -60,7 +60,7 @@ pub struct Vm {
     /// Coverage collected during the last run
     coverage: Vec<u64>,
     /// Breakpoints with the associated original bytes.
-    coverage_points: BTreeMap<u64, u8>
+    coverage_points: BTreeMap<u64, u8>,
 }
 
 impl Vm {
@@ -149,7 +149,7 @@ impl Vm {
             regs: Default::default(),
             sregs: sregs,
             coverage: Vec::new(),
-            coverage_points: BTreeMap::new()
+            coverage_points: BTreeMap::new(),
         })
     }
 
@@ -181,7 +181,7 @@ impl Vm {
     /// inserted, false if it already existed.
     pub fn add_coverage_point(&mut self, addr: u64) -> Result<bool> {
         if self.coverage_points.contains_key(&addr) {
-            return Ok(false)
+            return Ok(false);
         }
 
         // Get original byte.
@@ -203,31 +203,26 @@ impl Vm {
             "Vm memory size mismatch"
         );
 
-        println!("Source memory size: 0x{:x}", self.memory.pmem.size());
-
         // Restore original memory state
-        let used_mem = self.memory.pmem.used();
-        let log = self.vm.get_dirty_log(0, used_mem)?;
+        let log = self.vm.get_dirty_log(0, self.memory.pmem.size())?;
 
         // Loop through bitmap of pages dirtied
-        // for (bm_idx, bm) in log.into_iter().enumerate() {
-        //     for bit_idx in 0..64 {
-        //         if bm.is_bit_set(bit_idx) {
-        //             let frame_index = (bm_idx * 64) + bit_idx;
-        //             let pa = frame_index * 0x1000;
+        for (bm_idx, bm) in log.into_iter().enumerate() {
+            for bit_idx in 0..64 {
+                if bm.is_bit_set(bit_idx) {
+                    let frame_index = (bm_idx * 64) + bit_idx;
+                    let pa = frame_index * 0x1000;
 
-        //             println!("Restoring dirty frame 0x{:x}", pa);
-
-        //             let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
-        //             // self.memory.pmem.write(pa, orig_data)?;
-        //         }
-        //     }
-        // }
+                    let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
+                    self.memory.pmem.write(pa, orig_data)?;
+                }
+            }
+        }
 
         // copy registers from other state
-        // self.regs = other.regs;
-        // self.sregs = other.sregs;
-        // self.coverage.clear();
+        self.regs = other.regs;
+        self.sregs = other.sregs;
+        self.coverage.clear();
 
         Ok(())
     }
@@ -252,12 +247,12 @@ impl Vm {
                         self.memory.write(regs.rip, &[*orig_byte])?;
                         self.coverage.push(regs.rip);
                     } else {
-                        break VmExit::Breakpoint(regs.rip)
+                        break VmExit::Breakpoint(regs.rip);
                     }
-                },
+                }
                 // -1 as hlt takes the ip after its instruction
                 VcpuExit::Hlt => break VmExit::Hlt(regs.rip - 1),
-                _ => break VmExit::Unhandled(regs.rip)
+                _ => break VmExit::Unhandled(regs.rip),
             }
         };
 
@@ -282,20 +277,20 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
-    use memory::{PagePermissions, VirtualMemory};
-    use kvm_ioctls::{Kvm, VcpuExit};
+    use kvm_ioctls::Kvm;
+    use memory::{PagePermissions, VirtualMemory, PAGE_SIZE};
 
     use super::{Result, Vm, VmExit};
 
     #[test]
     /// Runs a simple piece of code until completion
     fn test_simple_exec() -> Result<()> {
-        let mut memory = VirtualMemory::new(512 * 0x1000)?;
+        let mut memory = VirtualMemory::new(512 * PAGE_SIZE)?;
 
         // Maps a simple `add rdx, rax; hlt`
         let shellcode: &[u8] = &[
             0x48, 0x01, 0xc2, // add rdx, rax
-            0xf4              // hlt
+            0xf4, // hlt
         ];
 
         memory.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)?;
@@ -328,8 +323,8 @@ mod tests {
         let shellcode: &[u8] = &[
             0x48, 0x01, 0xc2, // add rdx, rax
             0x48, 0x01, 0xd8, // add rax, rbx
-            0x31, 0xc0,       // xor eax, eax
-            0xf4              // hlt
+            0x31, 0xc0, // xor eax, eax
+            0xf4, // hlt
         ];
 
         memory.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)?;
@@ -359,8 +354,13 @@ mod tests {
         assert_eq!(vmexit, VmExit::Hlt(0x1337008), "Wrong exit address");
         assert_eq!(breakpoints, *coverage, "Coverage does not match");
 
-        // Check that a reset does reset the breakpoints
+        // Check that a reset does not reset the breakpoints in memory
         vm.reset(&original_vm)?;
+
+        let mut shellcode_read_back: [u8; 9] = [0; 9];
+        vm.memory.read(0x1337000, &mut shellcode_read_back)?;
+
+        assert_eq!(shellcode, shellcode_read_back);
 
         Ok(())
     }
