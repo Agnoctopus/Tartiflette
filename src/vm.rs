@@ -10,7 +10,7 @@ use kvm_bindings::{
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use memory::{MemoryError, VirtualMemory};
+use memory::{MemoryError, VirtualMemory, PAGE_SIZE};
 
 type Result<T> = std::result::Result<T, VmError>;
 
@@ -87,6 +87,7 @@ impl Vm {
         const CR0_WP: u64 = 1 << 16;
 
         const CR4_PAE: u64 = 1 << 5;
+        const CR4_OSXSAVE: u64 = 1 << 18; // TODO: Maybe check for support with cpuid
         const IA32_EFER_LME: u64 = 1 << 8;
         const IA32_EFER_LMA: u64 = 1 << 10;
         const IA32_EFER_NXE: u64 = 1 << 11;
@@ -124,7 +125,7 @@ impl Vm {
         // Paging enable and paging
         sregs.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
         // Physical address extension (necessary for x64)
-        sregs.cr4 = CR4_PAE;
+        sregs.cr4 = CR4_PAE | CR4_OSXSAVE;
         // Sets x64 mode enabled (LME), active (LMA), and executable disable bit support (NXE)
         sregs.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
         // Sets the page table root address
@@ -211,7 +212,7 @@ impl Vm {
             for bit_idx in 0..64 {
                 if bm.is_bit_set(bit_idx) {
                     let frame_index = (bm_idx * 64) + bit_idx;
-                    let pa = frame_index * 0x1000;
+                    let pa = frame_index * PAGE_SIZE;
 
                     let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
                     self.memory.pmem.write(pa, orig_data)?;
