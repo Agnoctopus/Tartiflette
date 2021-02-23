@@ -9,11 +9,11 @@ mod vm;
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 use memory::{PagePermissions, VirtualMemory};
-use vm::Vm;
+use vm::{Vm, VmExit};
 
 const ASM_64_SHELLCODE: &[u8] = &[
     0x48, 0x01, 0xc2, // add rdx, rax
-    0xcc, // breakpoint
+    0xf4, // breakpoint
 ];
 
 fn run() {
@@ -40,7 +40,7 @@ fn run() {
 
     // Run virtual machine
     match vm.run().expect("Run failed") {
-        kvm_ioctls::VcpuExit::Debug => println!("Breakpoint hits !"),
+        VmExit::Breakpoint(pc) => println!("Breakpoint hit: 0x{:x}", pc),
         error_code => println!("Failed: {:?}", error_code),
     }
 
