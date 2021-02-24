@@ -111,8 +111,8 @@ class DumpSnapshot(gdb.Command):
             proc_mem.seek(start)
 
             mapping = {
-                "start": f"0x{start:x}",
-                "end": f"0x{end:x}",
+                "start": f"{start:x}",
+                "end": f"{end:x}",
                 "physical_offset": offset,
                 "permissions": perm_str
             }
@@ -138,7 +138,7 @@ class DumpSnapshot(gdb.Command):
 
         for reg in arch_registers[arch]:
             reg_value = gdb_int_value(f"${reg}")
-            register_data[reg] = f"0x{reg_value:x}"
+            register_data[reg] = f"{reg_value:x}"
 
         snapshot_info["registers"] = register_data
 
@@ -162,10 +162,10 @@ class DumpSnapshot(gdb.Command):
         # an identifier. Otherwise all tools won't be happy
         for name, addresses in symbol_map.items():
             if len(addresses) == 1:
-                symbol_info[name] = f"0x{addresses[0]:x}"
+                symbol_info[name] = f"{addresses[0]:x}"
             else:
                 for i, e in enumerate(addresses):
-                    symbol_info[f"{name}_{i}"] = f"0x{e:x}"
+                    symbol_info[f"{name}_{i}"] = f"{e:x}"
 
         snapshot_info["symbols"] = symbol_info
 
