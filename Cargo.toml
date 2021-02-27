@@ -16,3 +16,4 @@ kvm-bindings = "0.3.0"
 clap = "2.33.3"
 memory = { path = "src/memory" }
 bits = { path = "src/bits" }
+snapshot = { path = "src/snapshot" }

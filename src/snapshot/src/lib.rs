@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::iter::FromIterator;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum SnapshotError {
@@ -19,7 +19,7 @@ impl From<std::io::Error> for SnapshotError {
 }
 
 impl From<serde_json::Error> for SnapshotError {
-    fn from(err: serde_json::Error) -> SnapshotError {
+    fn from(_err: serde_json::Error) -> SnapshotError {
         SnapshotError::ParsingError
     }
 }
@@ -87,21 +87,46 @@ pub struct Snapshot {
     /// List of basic block addresses used for coverage
     #[serde(default)]
     coverage: Vec<u64>,
+    /// File descriptor over the raw memory region
+    #[serde(skip)]
+    #[serde(default)]
+    file: Option<File>,
 }
 
 impl Snapshot {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Snapshot> {
+    pub fn new<P: AsRef<Path>>(p: P) -> Result<Snapshot> {
+        let path = p.as_ref();
         let info_file = File::open(path)?;
         let mut reader = BufReader::new(info_file);
         let mut json = String::new();
 
         reader.read_to_string(&mut json)?;
 
-        Snapshot::from(&json)
+        Snapshot::from(path.parent(), &json)
     }
 
-    pub fn from(json: &str) -> Result<Snapshot> {
+    /// Loads information from a json string. Does not load the raw memory snapshot.
+    pub fn from_json(json: &str) -> Result<Snapshot> {
         serde_json::from_str(json).map_err(|_| SnapshotError::ParsingError)
+    }
+
+    fn from(folder_path: Option<&Path>, json: &str) -> Result<Snapshot> {
+        // Parse the file information
+        let mut snapshot = Snapshot::from_json(json)?;
+
+        // The path is built relative to the json information file.
+        let mut pb = PathBuf::new();
+
+        if let Some(root) = folder_path {
+            pb.push(root);
+        }
+
+        pb.push(snapshot.memory_file.to_owned());
+
+        let memory = File::open(pb)?;
+        snapshot.file = Some(memory);
+
+        Ok(snapshot)
     }
 }
 
@@ -119,7 +144,7 @@ mod tests {
                     "start": "1337000",
                     "end": "1338000",
                     "physical_offset": "0",
-                    "permissions": "r-x"
+                    "permissions": "r-xp"
                 },
                 {
                     "start": "2000000",
@@ -140,7 +165,7 @@ mod tests {
         }
         "#;
 
-        Snapshot::from(sample_info)?;
+        Snapshot::from_json(sample_info)?;
         Ok(())
     }
 }
