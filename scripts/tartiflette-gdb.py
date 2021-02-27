@@ -113,7 +113,7 @@ class DumpSnapshot(gdb.Command):
             mapping = {
                 "start": f"{start:x}",
                 "end": f"{end:x}",
-                "physical_offset": offset,
+                "physical_offset": f"{offset:x}",
                 "permissions": perm_str
             }
 
