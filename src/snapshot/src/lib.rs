@@ -1,8 +1,9 @@
 use serde::de;
 use serde::{Deserialize, Deserializer};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
@@ -58,15 +59,23 @@ type Result<T> = std::result::Result<T, SnapshotError>;
 pub struct Mapping {
     /// Starting address of the mapping in virtual memory
     #[serde(deserialize_with = "u64_from_json")]
-    start: u64,
+    pub start: u64,
     /// Ending address of the mapping in virtual memory
     #[serde(deserialize_with = "u64_from_json")]
-    end: u64,
+    pub end: u64,
     /// Physical offset inside the snapshot dump
     #[serde(deserialize_with = "u64_from_json")]
-    physical_offset: u64,
+    pub physical_offset: u64,
+    /// Permissions (aka, any combination of rwx)
+    pub permissions: String,
     /// Optional path to the image to which the page belongs
-    image: Option<String>,
+    pub image: Option<String>,
+}
+
+impl Mapping {
+    pub fn size(&self) -> usize {
+        (self.end - self.start) as usize
+    }
 }
 
 /// Snapshot of a virtual address space
@@ -79,18 +88,18 @@ pub struct Snapshot {
     /// Registers state
     #[serde(deserialize_with = "map_strstr_to_stru64")]
     #[serde(default)]
-    registers: BTreeMap<String, u64>,
+    pub registers: BTreeMap<String, u64>,
     /// List of symbols
     #[serde(deserialize_with = "map_strstr_to_stru64")]
     #[serde(default)]
-    symbols: BTreeMap<String, u64>,
+    pub symbols: BTreeMap<String, u64>,
     /// List of basic block addresses used for coverage
     #[serde(default)]
     coverage: Vec<u64>,
     /// File descriptor over the raw memory region
     #[serde(skip)]
     #[serde(default)]
-    file: Option<File>,
+    file: Option<RefCell<File>>,
 }
 
 impl Snapshot {
@@ -110,6 +119,7 @@ impl Snapshot {
         serde_json::from_str(json).map_err(|_| SnapshotError::ParsingError)
     }
 
+    /// Loads a complete snapshot object from its definition.
     fn from(folder_path: Option<&Path>, json: &str) -> Result<Snapshot> {
         // Parse the file information
         let mut snapshot = Snapshot::from_json(json)?;
@@ -124,9 +134,34 @@ impl Snapshot {
         pb.push(snapshot.memory_file.to_owned());
 
         let memory = File::open(pb)?;
-        snapshot.file = Some(memory);
+        snapshot.file = Some(RefCell::new(memory));
 
         Ok(snapshot)
+    }
+
+    /// Returns the mappings contained in the snapshot.
+    pub fn mappings(&self) -> &Vec<Mapping> {
+        &self.mappings
+    }
+
+    /// Returns the size of the address space
+    pub fn size(&self) -> usize {
+        self.mappings.iter().map(|x| x.size()).sum()
+    }
+
+    pub fn read(&self, pa: u64, size: usize) -> Option<Vec<u8>> {
+        if let Some(file_cell) = &self.file {
+            let mut file = file_cell.borrow_mut();
+            file.seek(SeekFrom::Start(pa)).ok()?;
+            let mut result: Vec<u8> = vec![0; size];
+
+            let read_size = file.read(result.as_mut_slice()).ok()?;
+            result.resize(read_size, 0);
+
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 

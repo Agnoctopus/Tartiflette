@@ -9,12 +9,10 @@ mod vm;
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 use memory::{PagePermissions, VirtualMemory};
+use snapshot::Snapshot;
 use vm::{Vm, VmExit};
 
-const ASM_64_SHELLCODE: &[u8] = &[
-    0x48, 0x01, 0xc2, // add rdx, rax
-    0xf4, // breakpoint
-];
+const ASM_64_SHELLCODE: &[u8] = &[0xcc];
 
 fn run() {
     // Instantiate KVM
@@ -38,13 +36,19 @@ fn run() {
     regs.rdx = 0x337;
     vm.set_initial_regs(regs);
 
-    // Run virtual machine
-    match vm.run().expect("Run failed") {
-        VmExit::Breakpoint(pc) => println!("Breakpoint hit: 0x{:x}", pc),
-        error_code => println!("Failed: {:?}", error_code),
-    }
+    let result = vm.run().expect("Run failed");
 
-    // vm.reset().unwrap();
+    println!("Result: {:x?}", result);
+
+    // Loading from a snapshot
+    let mut snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
+        .expect("snapshot loading failed");
+
+    let snapshot_size = snapshot.size();
+
+    println!("Snapshot size: {}", snapshot_size);
+
+    let vm2 = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
 }
 
 /// Main function

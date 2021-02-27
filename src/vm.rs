@@ -1,6 +1,6 @@
 //! Virtual Machine system
 
-use std::collections::BTreeMap;
+use std::{borrow::Borrow, collections::BTreeMap};
 
 use bits::BitField;
 use kvm_bindings::{
@@ -10,7 +10,8 @@ use kvm_bindings::{
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 
-use memory::{MemoryError, VirtualMemory, PAGE_SIZE};
+use memory::{paging::PageTable, MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
+use snapshot::Snapshot;
 
 type Result<T> = std::result::Result<T, VmError>;
 
@@ -43,6 +44,21 @@ impl From<MemoryError> for VmError {
     fn from(err: MemoryError) -> VmError {
         VmError::Memory(err)
     }
+}
+
+fn string_perms_to_perms(perms: &str) -> PagePermissions {
+    let mut perm_flags = PagePermissions::new(0);
+
+    for c in perms.chars() {
+        match c {
+            'r' => perm_flags |= PagePermissions::READ,
+            'w' => perm_flags |= PagePermissions::WRITE,
+            'x' => perm_flags |= PagePermissions::EXECUTE,
+            _ => (),
+        }
+    }
+
+    perm_flags
 }
 
 /// Temporary implementation
@@ -152,6 +168,63 @@ impl Vm {
             coverage: Vec::new(),
             coverage_points: BTreeMap::new(),
         })
+    }
+
+    /// Creates a Virtual machine from a given snapshot
+    pub fn from_snapshot(kvm: &Kvm, snapshot: &Snapshot, memory_size: usize) -> Result<Vm> {
+        let mut memory = VirtualMemory::new(memory_size)?;
+
+        // TODO: Load the pages into memory
+        for mapping in snapshot.mappings() {
+            let perms = string_perms_to_perms(&mapping.permissions);
+
+            for offset in (0..mapping.size()).step_by(PAGE_SIZE) {
+                memory.mmap(mapping.start + offset as u64, PAGE_SIZE, perms)?;
+
+                // Write the data to memory
+                if let Some(data) =
+                    snapshot.read(mapping.physical_offset + offset as u64, PAGE_SIZE)
+                {
+                    // Read was incomplete
+                    if data.len() != PAGE_SIZE {
+                        return Err(VmError::Memory(MemoryError::OutOfMemory));
+                    }
+
+                    memory.write(mapping.start + offset as u64, data.as_slice())?;
+                }
+            }
+        }
+
+        // Load the register state
+        let mut vm = Vm::new(kvm, memory)?;
+        let mut regs = vm.get_initial_regs();
+
+        for (register, value) in snapshot.registers.iter() {
+            match register.as_str() {
+                "r15" => regs.r15 = *value,
+                "r14" => regs.r14 = *value,
+                "r13" => regs.r13 = *value,
+                "r12" => regs.r12 = *value,
+                "rbp" => regs.rbp = *value,
+                "rbx" => regs.rbx = *value,
+                "r11" => regs.r11 = *value,
+                "r10" => regs.r10 = *value,
+                "r9" => regs.r9 = *value,
+                "r8" => regs.r8 = *value,
+                "rax" => regs.rax = *value,
+                "rcx" => regs.rcx = *value,
+                "rdx" => regs.rdx = *value,
+                "rsi" => regs.rsi = *value,
+                "rdi" => regs.rdi = *value,
+                "rip" => regs.rip = *value,
+                "rsp" => regs.rsp = *value,
+                _ => (),
+            }
+        }
+
+        vm.set_initial_regs(regs);
+
+        Ok(vm)
     }
 
     /// Sets up the registers that will be used as the vm starting state.
