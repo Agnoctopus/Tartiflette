@@ -17,23 +17,14 @@ use input::input_init;
 use std::path::Path;
 use std::{fs, thread};
 
-/* Persistent-binary signature - if found within file, it means it's a persistent mode binary */
-const PERSISTENT_SIG: &[u8] = b"\x01_LIBHFUZZ_PERSISTENT_BINARY_SIGNATURE_\x02\xFF";
-/* HF NetDriver signature - if found within file, it means it's a NetDriver-based binary */
-const NETDRIVER_SIG: &[u8] = b"\x01_LIBHFUZZ_NETDRIVER_BINARY_SIGNATURE_\x02\xFF";
-
-const MAX_JOBS: usize = 1024;
-
-fn check(config: &mut Config) {
-    assert!(config.exe_config.cmdline.is_some());
-
+fn check_sig(config: &mut Config) {
     let exe_path = Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
 
     let exe_data = std::fs::read(exe_path).unwrap();
 
     if exe_data
-        .windows(PERSISTENT_SIG.len())
-        .any(|window| window == PERSISTENT_SIG)
+        .windows(config::PERSISTENT_SIG.len())
+        .any(|window| window == config::PERSISTENT_SIG)
     {
         println!(
             "Peristent signature found in {:?}. Enabling persistent fuzzing mode.",
@@ -42,47 +33,11 @@ fn check(config: &mut Config) {
         config.app_config.persistent = true;
     }
     if exe_data
-        .windows(NETDRIVER_SIG.len())
-        .any(|window| window == NETDRIVER_SIG)
+        .windows(config::NETDRIVER_SIG.len())
+        .any(|window| window == config::NETDRIVER_SIG)
     {
         println!("Netdriver signature found in {:?}.", exe_path);
         config.app_config.netdriver = true;
-    }
-
-    if config.app_config.socket_fuzzer {
-        config.app_config.timeout = 0;
-    }
-
-    if config.app_config.jobs == 0 {
-        eprint!("Too few fuzzing threads specified");
-    }
-
-    if let Some(output_dir) = config.io_config.output_dir.as_ref() {
-        let output_dir = Path::new(output_dir);
-        if !output_dir.exists() {
-            if let Err(error) = std::fs::create_dir(output_dir) {
-                eprintln!("error: {}", error);
-            }
-        }
-        return;
-    }
-
-    if let Some(crash_dir) = config.io_config.crash_dir.as_ref() {
-        let crash_dir = Path::new(crash_dir);
-        if !crash_dir.exists() {
-            if let Err(error) = std::fs::create_dir(crash_dir) {
-                eprintln!("error: {}", error);
-            }
-        }
-        return;
-    }
-
-    if config.app_config.jobs >= MAX_JOBS {
-        eprintln!(
-            "Too many fuzzing threads specified {} >= {}",
-            config.app_config.jobs, MAX_JOBS
-        );
-        return;
     }
 }
 
@@ -134,13 +89,9 @@ fn launch(mut config: Config) {
         return;
     }
 
-    check(&mut config);
+    config.validate();
 
-    let child = thread::spawn(move || {
-        fuzz::fuzz(config);
-    });
-
-    child.join().unwrap();
+    fuzz::fuzz(config);
 }
 
 /// Main function

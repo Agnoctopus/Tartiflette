@@ -2,7 +2,15 @@
 
 use crate::fuzz;
 use clap::ArgMatches;
+use std::path::Path;
 use std::{convert::TryFrom, str::FromStr};
+
+/* Persistent-binary signature - if found within file, it means it's a persistent mode binary */
+pub const PERSISTENT_SIG: &[u8] = b"\x01_LIBHFUZZ_PERSISTENT_BINARY_SIGNATURE_\x02\xFF";
+/* HF NetDriver signature - if found within file, it means it's a NetDriver-based binary */
+pub const NETDRIVER_SIG: &[u8] = b"\x01_LIBHFUZZ_NETDRIVER_BINARY_SIGNATURE_\x02\xFF";
+
+pub const MAX_JOBS: usize = 1024;
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -18,6 +26,30 @@ pub struct IOConfig {
     pub crash_dir: Option<String>,
     pub cov_dir: Option<String>,
     pub max_file_size: usize,
+}
+
+impl IOConfig {
+    pub fn validate(&mut self) {
+        if let Some(output_dir) = self.output_dir.as_ref() {
+            let output_dir = Path::new(output_dir);
+            if !output_dir.exists() {
+                if let Err(error) = std::fs::create_dir(output_dir) {
+                    eprintln!("error: {}", error);
+                }
+            }
+            return;
+        }
+
+        if let Some(crash_dir) = self.crash_dir.as_ref() {
+            let crash_dir = Path::new(crash_dir);
+            if !crash_dir.exists() {
+                if let Err(error) = std::fs::create_dir(crash_dir) {
+                    eprintln!("error: {}", error);
+                }
+            }
+            return;
+        }
+    }
 }
 
 impl TryFrom<&ArgMatches<'_>> for IOConfig {
@@ -61,6 +93,12 @@ pub struct ExeConfig {
     pub fb_mutation_cmdline: Option<String>,
 }
 
+impl ExeConfig {
+    pub fn validate(&mut self) {
+        assert!(self.cmdline.is_some());
+    }
+}
+
 impl TryFrom<&ArgMatches<'_>> for ExeConfig {
     type Error = ConfigError;
 
@@ -93,6 +131,26 @@ pub struct AppConfig {
     pub timeout: usize,
     pub max_input_size: usize,
     pub random_ascii: bool,
+}
+
+impl AppConfig {
+    pub fn validate(&mut self) {
+        if self.socket_fuzzer {
+            self.timeout = 0;
+        }
+
+        if self.jobs == 0 {
+            eprint!("Too few fuzzing threads specified");
+        }
+
+        if self.jobs >= MAX_JOBS {
+            eprintln!(
+                "Too many fuzzing threads specified {} >= {}",
+                self.jobs, MAX_JOBS
+            );
+            return;
+        }
+    }
 }
 
 impl TryFrom<&ArgMatches<'_>> for AppConfig {
@@ -136,6 +194,14 @@ pub struct Config {
     pub exe_config: ExeConfig,
     /// Application config
     pub app_config: AppConfig,
+}
+
+impl Config {
+    pub fn validate(&mut self) {
+        self.exe_config.validate();
+        self.app_config.validate();
+        self.io_config.validate()
+    }
 }
 
 impl TryFrom<&ArgMatches<'_>> for Config {
