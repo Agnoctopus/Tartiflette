@@ -17,12 +17,7 @@ pub fn input_get_entries(config: &Config) -> Result<Vec<PathBuf>, String> {
         return Err(format!("No useful files in the input directory"));
     }
 
-    let input_dir = config
-        .io_config
-        .input_dir
-        .as_ref()
-        .map(Path::new)
-        .ok_or(format!("No input directory specified"))?;
+    let input_dir = Path::new(&config.io_config.input_dir);
     if !input_dir.exists() {
         return Err(format!(
             "Cannot find the input directory specified: {:?}",
@@ -75,12 +70,7 @@ pub fn input_get_entries(config: &Config) -> Result<Vec<PathBuf>, String> {
 }
 
 pub fn input_init(config: &mut Config) -> Result<(), String> {
-    let input_dir = config
-        .io_config
-        .input_dir
-        .as_ref()
-        .map(Path::new)
-        .ok_or(format!("No input directory specified"))?;
+    let input_dir = Path::new(&config.io_config.input_dir);
     if !input_dir.exists() {
         return Err(format!(
             "Cannot find the input directory specified: {:?}",

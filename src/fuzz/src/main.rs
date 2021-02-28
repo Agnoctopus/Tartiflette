@@ -11,11 +11,12 @@ mod random;
 
 extern crate bits;
 
+use crate::input::input_init;
+
+use std::path::Path;
+
 use chrono::Local;
 use config::Config;
-use input::input_init;
-use std::path::Path;
-use std::{fs, thread};
 
 fn check_sig(config: &mut Config) {
     let exe_path = Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
@@ -51,13 +52,6 @@ fn launch(mut config: Config) {
     assert!(cmdline.len() > 0);
     assert!(std::path::Path::new(&cmdline[0]).exists());
 
-    if let Some(input_dir) = config.io_config.input_dir.as_ref() {
-        // Check readble input diecrtotry no readable.
-    }
-    if let Some(output_dir) = config.io_config.output_dir.as_ref() {
-        // Check readble input diecrtotry no readable.
-    }
-
     let localtime = Local::now();
     println!(
         "Start time: {}",
@@ -73,14 +67,8 @@ fn launch(mut config: Config) {
             .as_deref()
             .unwrap_or("")
     );
-    println!(
-        "Input: {}",
-        config.io_config.input_dir.as_deref().unwrap_or("")
-    );
-    println!(
-        "Ouput: {}",
-        config.io_config.output_dir.as_deref().unwrap_or("")
-    );
+    println!("Input: {}", config.io_config.input_dir);
+    println!("Ouput: {}", config.io_config.output_dir);
     println!("Minimize: {}", config.app_config.minimize);
     println!("Jobs: {}", config.app_config.jobs);
 
@@ -89,7 +77,10 @@ fn launch(mut config: Config) {
         return;
     }
 
-    config.validate();
+    if let Err(error) = config.validate() {
+        eprintln!("Failed to validate the configuration: {}", error);
+    }
+    check_sig(&mut config);
 
     fuzz::fuzz(config);
 }

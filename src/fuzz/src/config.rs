@@ -2,53 +2,74 @@
 
 use crate::fuzz;
 use clap::ArgMatches;
-use std::path::Path;
-use std::{convert::TryFrom, str::FromStr};
+use std::{convert::TryFrom, fs, path::Path};
 
-/* Persistent-binary signature - if found within file, it means it's a persistent mode binary */
+/// Persistent-binary signature - if found within file, it means it's a persistent mode binary
 pub const PERSISTENT_SIG: &[u8] = b"\x01_LIBHFUZZ_PERSISTENT_BINARY_SIGNATURE_\x02\xFF";
-/* HF NetDriver signature - if found within file, it means it's a NetDriver-based binary */
+/// HF NetDriver signature - if found within file, it means it's a NetDriver-based binary
 pub const NETDRIVER_SIG: &[u8] = b"\x01_LIBHFUZZ_NETDRIVER_BINARY_SIGNATURE_\x02\xFF";
-
+/// Max number of jobs
 pub const MAX_JOBS: usize = 1024;
 
+/// Error that can occured during the cli config parsing
 #[derive(Debug)]
 pub enum ConfigError {
-    Conversion,
+    /// A configuration `field` is required
+    Required(String),
+    /// A `field` conversion error occured
+    Conversion(String),
 }
 
 /// Config regarding I/O
 #[derive(Debug)]
 pub struct IOConfig {
-    pub input_dir: Option<String>,
-    pub input_file_count: usize,
-    pub output_dir: Option<String>,
-    pub crash_dir: Option<String>,
-    pub cov_dir: Option<String>,
+    /// Input directory
+    pub input_dir: String,
+    /// Output directory
+    pub output_dir: String,
+    /// Crash directory
+    pub crash_dir: String,
+    /// Coverage directory
+    pub cov_dir: String,
+    /// Maximum file size
     pub max_file_size: usize,
+
+    /// TODO
+    pub input_file_count: usize,
 }
 
 impl IOConfig {
-    pub fn validate(&mut self) {
-        if let Some(output_dir) = self.output_dir.as_ref() {
-            let output_dir = Path::new(output_dir);
-            if !output_dir.exists() {
-                if let Err(error) = std::fs::create_dir(output_dir) {
-                    eprintln!("error: {}", error);
-                }
+    /// Valide the `IOConfig`
+    pub fn validate(&mut self) -> Result<(), String> {
+        let input_dir = Path::new(&self.input_dir);
+        if !input_dir.exists() {
+            if let Err(error) = fs::create_dir(input_dir) {
+                return Err(format!("{}", error));
             }
-            return;
         }
 
-        if let Some(crash_dir) = self.crash_dir.as_ref() {
-            let crash_dir = Path::new(crash_dir);
-            if !crash_dir.exists() {
-                if let Err(error) = std::fs::create_dir(crash_dir) {
-                    eprintln!("error: {}", error);
-                }
+        let output_dir = Path::new(&self.output_dir);
+        if !output_dir.exists() {
+            if let Err(error) = fs::create_dir(output_dir) {
+                return Err(format!("{}", error));
             }
-            return;
         }
+
+        let crash_dir = Path::new(&self.crash_dir);
+        if !crash_dir.exists() {
+            if let Err(error) = fs::create_dir(crash_dir) {
+                return Err(format!("{}", error));
+            }
+        }
+
+        let cov_dir = Path::new(&self.cov_dir);
+        if !cov_dir.exists() {
+            if let Err(error) = fs::create_dir(cov_dir) {
+                return Err(format!("{}", error));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -56,23 +77,27 @@ impl TryFrom<&ArgMatches<'_>> for IOConfig {
     type Error = ConfigError;
 
     fn try_from(matches: &ArgMatches) -> Result<Self, Self::Error> {
-        let input_dir = matches.value_of("input").map(String::from);
+        let input_dir = matches
+            .value_of("input")
+            .map(String::from)
+            .ok_or(ConfigError::Required("input".to_string()))?;
         let output_dir = matches
             .value_of("output")
             .map(String::from)
-            .or(input_dir.clone());
+            .unwrap_or(input_dir.clone());
         let crash_dir = matches
             .value_of("crashdir")
             .map(String::from)
-            .or(output_dir.clone());
+            .unwrap_or(input_dir.clone());
         let cov_dir = matches
             .value_of("crashdir")
             .map(String::from)
-            .or(output_dir.clone());
+            .unwrap_or(input_dir.clone());
         let max_file_size = matches
             .value_of("max_file_size")
-            .map(|s| s.parse::<usize>().unwrap())
-            .unwrap_or(128 * 1024 * 1024);
+            .map(|s| s.parse::<usize>())
+            .unwrap_or(Ok(128 * 1024 * 1024))
+            .or(Err(ConfigError::Conversion("max_file_size".to_string())))?;
 
         Ok(Self {
             input_dir: input_dir,
@@ -94,8 +119,9 @@ pub struct ExeConfig {
 }
 
 impl ExeConfig {
-    pub fn validate(&mut self) {
-        assert!(self.cmdline.is_some());
+    /// Valide the `ExeConfig`
+    pub fn validate(&mut self) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -134,22 +160,23 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn validate(&mut self) {
+    pub fn validate(&mut self) -> Result<(), String> {
         if self.socket_fuzzer {
             self.timeout = 0;
         }
 
         if self.jobs == 0 {
-            eprint!("Too few fuzzing threads specified");
+            return Err(format!("Too few fuzzing threads specified"));
         }
 
         if self.jobs >= MAX_JOBS {
-            eprintln!(
+            return Err(format!(
                 "Too many fuzzing threads specified {} >= {}",
                 self.jobs, MAX_JOBS
-            );
-            return;
+            ));
         }
+
+        Ok(())
     }
 }
 
@@ -197,7 +224,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn validate(&mut self) {
+    pub fn validate(&mut self) -> Result<(), String> {
         self.exe_config.validate();
         self.app_config.validate();
         self.io_config.validate()

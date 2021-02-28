@@ -24,8 +24,7 @@ use std::{
 
 use bits::BitField;
 use chrono::{DateTime, Local};
-use cmp::min;
-use thread::{sleep, sleep_ms};
+use thread::sleep;
 
 const ASAN_COMMON_FLAGS: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=0:handle_segv=2:handle_sigbus=2:handle_abort=2:handle_sigill=2:handle_sigfpe=2:abort_on_error=1:log_path=/tmp/here";
 const MASAN_COMMON_FLAGS: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=0:handle_segv=2:handle_sigbus=2:handle_abort=2:handle_sigill=2:handle_sigfpe=2:abort_on_error=1:wrap_signals=0:print_stats=1:log_path=/tmp/here";
@@ -352,15 +351,8 @@ fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
         *max_size = cmp::max(*max_size, fuzz_file.size);
     }
 
-    let output_dir = app
-        .config
-        .io_config
-        .output_dir
-        .as_ref()
-        .unwrap_or(app.config.io_config.input_dir.as_ref().unwrap());
-
     if !app.config.app_config.socket_fuzzer {
-        write_cov_file(output_dir, &fuzz_file);
+        write_cov_file(&app.config.io_config.output_dir, &fuzz_file);
     }
 
     {
