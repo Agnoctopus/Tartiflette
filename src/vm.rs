@@ -239,6 +239,16 @@ impl Vm {
         self.regs
     }
 
+    /// Commit the local registers to the kvm vcpu
+    pub fn commit_registers(&mut self) -> Result<()> {
+        // The second bit of rflags must always be set.
+        self.regs.rflags |= 2;
+        self.cpu.set_regs(&self.regs)?;
+        self.cpu.set_sregs(&self.sregs)?;
+
+        Ok(())
+    }
+
     #[inline]
     pub fn get_coverage(&self) -> &Vec<u64> {
         &self.coverage
@@ -298,17 +308,14 @@ impl Vm {
         self.sregs = other.sregs;
         self.coverage.clear();
 
+        /// Sets the original registers into kvm vcpu
+        self.commit_registers()?;
+
         Ok(())
     }
 
-    /// Runs the virtual memory
+    /// Starts the vcpu and respond to events
     pub fn run(&mut self) -> Result<VmExit> {
-        // The second bit of rflags must always be set.
-        self.regs.rflags |= 2;
-        self.cpu.set_regs(&self.regs)?;
-        self.cpu.set_sregs(&self.sregs)?;
-        self.vm.get_dirty_log(0, self.memory.pmem.size())?;
-
         let result = loop {
             let exit = self.cpu.run()?;
             let regs = self.cpu.get_regs()?;
@@ -380,6 +387,7 @@ mod tests {
         regs.rip = 0x1337000;
 
         vm.set_initial_regs(regs);
+        vm.commit_registers()?;
 
         // Runs the vm until completion (hlt)
         let vmexit = vm.run()?;
@@ -413,6 +421,7 @@ mod tests {
         let mut regs = vm.get_initial_regs();
         regs.rip = 0x1337000;
         vm.set_initial_regs(regs);
+        vm.commit_registers()?;
 
         // Add breakpoints
         let breakpoints: Vec<u64> = vec![0x1337000, 0x1337003];
