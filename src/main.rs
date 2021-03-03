@@ -9,12 +9,30 @@ mod vm;
 #[allow(unused)]
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 use memory::{PagePermissions, VirtualMemory};
+use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use nix::unistd::Pid;
 use snapshot::Snapshot;
+use std::thread;
+use std::time::Duration;
 use vm::{Vm, VmExit};
 
-const ASM_64_SHELLCODE: &[u8] = &[0xcc];
+const ASM_64_SHELLCODE: &[u8] = &[0xeb, 0xfe];
+
+extern "C" fn vm_tock(_: i32) {
+    // No-op
+    println!("VM TOCK");
+}
 
 fn run() {
+    // Setup exception handler
+    let sigstuff = SigAction::new(
+        SigHandler::Handler(vm_tock),
+        SaFlags::empty(),
+        SigSet::empty(),
+    );
+
+    unsafe { sigaction(Signal::SIGUSR2, &sigstuff) }.unwrap();
+
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
     assert!(kvm.get_api_version() >= 12);
@@ -35,20 +53,27 @@ fn run() {
     regs.rax = 0x1000;
     regs.rdx = 0x337;
     vm.set_initial_regs(regs);
+    vm.commit_registers();
+
+    // Start timer thread to interrupt vm
+    thread::spawn(|| loop {
+        thread::sleep(Duration::from_millis(1000));
+        kill(Pid::from_raw(0), Signal::SIGUSR2);
+    });
 
     let result = vm.run().expect("Run failed");
 
-    println!("Result: {:x?}", result);
+    println!("Exit status: {:x?}", result);
 
-    // Loading from a snapshot
-    let mut snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
-        .expect("snapshot loading failed");
+    // // Loading from a snapshot
+    // let mut snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
+    // .expect("snapshot loading failed");
 
-    let snapshot_size = snapshot.size();
+    // let snapshot_size = snapshot.size();
 
-    println!("Snapshot size: {}", snapshot_size);
+    // println!("Snapshot size: {}", snapshot_size);
 
-    let vm2 = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+    // let vm2 = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
 }
 
 /// Main function

@@ -14,6 +14,7 @@ description= "Fuzz program inside KVM hypervisor binded with Honggfuzz"
 kvm-ioctls = "0.6.0"
 kvm-bindings = "0.3.0"
 clap = "2.33.3"
+nix = "0.20.0"
 memory = { path = "src/memory" }
 bits = { path = "src/bits" }
 snapshot = { path = "src/snapshot" }

@@ -9,6 +9,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
+use nix::errno::Errno;
 
 use memory::{paging::PageTable, MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
 use snapshot::Snapshot;
@@ -32,6 +33,8 @@ pub enum VmExit {
     Breakpoint(u64),
     /// Raw vmexit unhandled by tartiflette
     Unhandled(u64),
+    /// Vm was interrupted by the host (timeout)
+    Interrupted,
 }
 
 impl From<kvm_ioctls::Error> for VmError {
@@ -223,6 +226,7 @@ impl Vm {
         }
 
         vm.set_initial_regs(regs);
+        vm.commit_registers()?;
 
         Ok(vm)
     }
@@ -250,6 +254,7 @@ impl Vm {
     }
 
     #[inline]
+    /// Returns the list of coverage points hit during the program execution.
     pub fn get_coverage(&self) -> &Vec<u64> {
         &self.coverage
     }
@@ -308,7 +313,7 @@ impl Vm {
         self.sregs = other.sregs;
         self.coverage.clear();
 
-        /// Sets the original registers into kvm vcpu
+        // Sets the original registers into kvm vcpu
         self.commit_registers()?;
 
         Ok(())
@@ -317,12 +322,20 @@ impl Vm {
     /// Starts the vcpu and respond to events
     pub fn run(&mut self) -> Result<VmExit> {
         let result = loop {
-            let exit = self.cpu.run()?;
+            let exit = self.cpu.run();
             let regs = self.cpu.get_regs()?;
 
-            println!("VcpuExit: {:?}", exit);
+            if let Err(err) = exit {
+                match Errno::from_i32(err.errno()) {
+                    Errno::EINTR | Errno::EAGAIN => break VmExit::Interrupted,
+                    _ => break VmExit::Unhandled(regs.rip),
+                }
+            }
 
-            match exit {
+            let vmexit = exit.unwrap();
+            println!("VcpuExit: {:?}", vmexit);
+
+            match vmexit {
                 VcpuExit::Debug => {
                     if let Some(orig_byte) = self.coverage_points.get(&regs.rip) {
                         self.memory.write(regs.rip, &[*orig_byte])?;
