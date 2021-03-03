@@ -287,7 +287,7 @@ impl Vm {
                     let frame_index = (bm_idx * 64) + bit_idx;
                     let pa = frame_index * PAGE_SIZE;
 
-                    let orig_data = other.memory.pmem.raw_slice(pa, 0x1000)?;
+                    let orig_data = other.memory.pmem.raw_slice(pa, PAGE_SIZE)?;
                     self.memory.pmem.write(pa, orig_data)?;
                 }
             }

@@ -6,5 +6,5 @@ authors = ["César Belley <cesar.belley@lse.epita.fr>",
 edition = "2018"
 
 [dependencies]
-libc = "0.2.85"
+nix = "0.20.0"
 bits = { path = "../bits" }

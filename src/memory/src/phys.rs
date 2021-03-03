@@ -5,7 +5,7 @@ use super::MemoryError;
 use super::{Result, PAGE_SIZE};
 
 use bits::Alignement;
-use libc::MAP_FAILED;
+use nix::sys::mman::{mmap, MapFlags, ProtFlags};
 
 /// Virtual machine physical memory
 pub struct PhysicalMemory {
@@ -22,26 +22,20 @@ impl PhysicalMemory {
     pub fn new(memory_size: usize) -> Result<Self> {
         // Align size
         let size = memory_size.align_power2(PAGE_SIZE);
-
-        // Create the physical memory area
         let raw_data = unsafe {
-            libc::mmap(
+            mmap(
                 core::ptr::null_mut(),
                 size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_NORESERVE,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                MapFlags::MAP_ANONYMOUS | MapFlags::MAP_PRIVATE,
                 -1,
                 0,
-            ) as *mut u8
-        };
-
-        // Failed to mmap
-        if raw_data == MAP_FAILED as *mut u8 {
-            return Err(MemoryError::PhysmemAlloc);
+            )
         }
+        .map_err(|_| MemoryError::PhysmemAlloc)?;
 
         Ok(Self {
-            raw_data: raw_data,
+            raw_data: raw_data as *mut u8,
             size: size,
             top: 0,
         })
