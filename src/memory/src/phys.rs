@@ -5,7 +5,7 @@ use super::MemoryError;
 use super::{Result, PAGE_SIZE};
 
 use bits::Alignement;
-use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 
 /// Virtual machine physical memory
 pub struct PhysicalMemory {
@@ -180,5 +180,11 @@ impl FrameAllocator for PhysicalMemory {
     // Translate a frame address to its virtual address
     fn translate(&self, frame_address: usize) -> usize {
         self.raw_data as usize + frame_address
+    }
+}
+
+impl Drop for PhysicalMemory {
+    fn drop(&mut self) {
+        unsafe { munmap(self.raw_data.cast(), self.size).unwrap() }
     }
 }
