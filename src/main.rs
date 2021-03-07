@@ -12,18 +12,34 @@ use memory::{PagePermissions, VirtualMemory};
 use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::unistd::Pid;
 use snapshot::Snapshot;
+
 use std::thread;
 use std::time::Duration;
+
+use config::Config;
 use vm::{Vm, VmExit};
 
-const ASM_64_SHELLCODE: &[u8] = &[0xeb, 0xfe];
+const ASM_64_SHELLCODE: &[u8] = &[0xeb, 0xfe]; // jmp 0x0
 
 extern "C" fn vm_tock(_: i32) {
     // No-op
     println!("VM TOCK");
 }
 
-fn run() {
+fn run_snapshot(kvm: &Kvm, config: Config) {
+    let mut snapshot = Snapshot::new(config.snapshot.unwrap()).expect("snapshot loading failed");
+
+    let snapshot_size = snapshot.size();
+    println!("Snapshot size: {}", snapshot_size);
+
+    let mut vm = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+
+    // Run the vm
+    let result = vm.run().expect("Run failed");
+    println!("Exit status: {:x?}", result);
+}
+
+fn run(config: Config) {
     // Setup exception handler
     let sigstuff = SigAction::new(
         SigHandler::Handler(vm_tock),
@@ -39,41 +55,37 @@ fn run() {
 
     // Setup virtual memory
     let mut vm_mem = VirtualMemory::new(512 * 0x1000).expect("Could not allocate Vm memory");
-
     vm_mem
         .mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)
-        .unwrap();
-    vm_mem.write(0x1337000, ASM_64_SHELLCODE).unwrap();
+        .expect("Failed to mmap");
+    vm_mem
+        .write(0x1337000, ASM_64_SHELLCODE)
+        .expect("Failed to write shellcode");
 
     // Setup virtual machine
-    let mut vm = Vm::new(&kvm, vm_mem).unwrap();
+    let mut vm = Vm::new(&kvm, vm_mem).expect("Failed to instantiate a new VM");
 
     let mut regs = vm.get_initial_regs();
     regs.rip = 0x1337000;
     regs.rax = 0x1000;
     regs.rdx = 0x337;
     vm.set_initial_regs(regs);
-    vm.commit_registers();
+    vm.commit_registers()
+        .expect("Failed to commit VM registres");
 
     // Start timer thread to interrupt vm
-    thread::spawn(|| loop {
+    thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(1000));
-        kill(Pid::from_raw(0), Signal::SIGUSR2);
+        kill(Pid::from_raw(0), Signal::SIGUSR2).unwrap();
     });
 
+    // Run the vm
     let result = vm.run().expect("Run failed");
-
     println!("Exit status: {:x?}", result);
 
-    // // Loading from a snapshot
-    // let mut snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
-    // .expect("snapshot loading failed");
-
-    // let snapshot_size = snapshot.size();
-
-    // println!("Snapshot size: {}", snapshot_size);
-
-    // let vm2 = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+    if config.snapshot.is_some() {
+        run_snapshot(&kvm, config);
+    }
 }
 
 /// Main function
@@ -84,8 +96,8 @@ fn main() {
 
     // Parse the command line
     match cli::CLI::parse(args) {
-        Ok(_config) => {
-            run();
+        Ok(config) => {
+            run(config);
         }
         Err(error) => {
             eprintln!("Error while parsing the command line.");
