@@ -1,8 +1,8 @@
 //! Virtual Machine system
 
-use std::{borrow::Borrow, collections::BTreeMap};
+use std::collections::BTreeMap;
 
-use bits::BitField;
+use bits::{Alignement, BitField};
 use kvm_bindings::{
     kvm_guest_debug, kvm_regs, kvm_segment, kvm_sregs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP,
     KVM_MEM_LOG_DIRTY_PAGES,
@@ -25,11 +25,12 @@ pub enum VmError {
     Kvm(kvm_ioctls::Error),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+/// Vm exit reason showed by tartiflette
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmExit {
     /// Stopped on a halt instruction
     Hlt(u64),
-    /// Stopped on a debug instruction that it not coverage.
+    /// Stopped on a debug instruction that is not coverage
     Breakpoint(u64),
     /// Raw vmexit unhandled by tartiflette
     Unhandled(u64),
@@ -78,7 +79,7 @@ pub struct Vm {
     sregs: kvm_sregs,
     /// Coverage collected during the last run
     coverage: Vec<u64>,
-    /// Breakpoints with the associated original bytes.
+    /// Breakpoints with the associated original bytes
     coverage_points: BTreeMap<u64, u8>,
 }
 
@@ -196,31 +197,43 @@ impl Vm {
                     memory.write(mapping.start + offset as u64, data.as_slice())?;
                 }
             }
+            // TODO Why go page to page, why not:
+            if false {
+                let size = mapping.size().align_power2(PAGE_SIZE);
+                memory.mmap(mapping.start, size, perms)?;
+                if let Some(data) = snapshot.read(mapping.physical_offset as u64, size) {
+                    if data.len() != size {
+                        return Err(VmError::Memory(MemoryError::OutOfMemory));
+                    }
+                    memory.write(mapping.start as u64, &data)?;
+                }
+            }
         }
 
         // Load the register state
         let mut vm = Vm::new(kvm, memory)?;
         let mut regs = vm.get_initial_regs();
 
-        for (register, value) in snapshot.registers.iter() {
+        // Loop through registers
+        for (register, &value) in snapshot.registers.iter() {
             match register.as_str() {
-                "r15" => regs.r15 = *value,
-                "r14" => regs.r14 = *value,
-                "r13" => regs.r13 = *value,
-                "r12" => regs.r12 = *value,
-                "rbp" => regs.rbp = *value,
-                "rbx" => regs.rbx = *value,
-                "r11" => regs.r11 = *value,
-                "r10" => regs.r10 = *value,
-                "r9" => regs.r9 = *value,
-                "r8" => regs.r8 = *value,
-                "rax" => regs.rax = *value,
-                "rcx" => regs.rcx = *value,
-                "rdx" => regs.rdx = *value,
-                "rsi" => regs.rsi = *value,
-                "rdi" => regs.rdi = *value,
-                "rip" => regs.rip = *value,
-                "rsp" => regs.rsp = *value,
+                "r15" => regs.r15 = value,
+                "r14" => regs.r14 = value,
+                "r13" => regs.r13 = value,
+                "r12" => regs.r12 = value,
+                "rbp" => regs.rbp = value,
+                "rbx" => regs.rbx = value,
+                "r11" => regs.r11 = value,
+                "r10" => regs.r10 = value,
+                "r9" => regs.r9 = value,
+                "r8" => regs.r8 = value,
+                "rax" => regs.rax = value,
+                "rcx" => regs.rcx = value,
+                "rdx" => regs.rdx = value,
+                "rsi" => regs.rsi = value,
+                "rdi" => regs.rdi = value,
+                "rip" => regs.rip = value,
+                "rsp" => regs.rsp = value,
                 _ => (),
             }
         }
@@ -246,28 +259,28 @@ impl Vm {
     /// Commit the local registers to the kvm vcpu
     pub fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
-        self.regs.rflags |= 2;
+        self.regs.rflags |= 1 << 1;
         self.cpu.set_regs(&self.regs)?;
         self.cpu.set_sregs(&self.sregs)?;
 
         Ok(())
     }
 
-    #[inline]
     /// Returns the list of coverage points hit during the program execution.
+    #[inline]
     pub fn get_coverage(&self) -> &Vec<u64> {
         &self.coverage
     }
 
-    #[inline]
     /// Returns the current registers of the virtual machine.
+    #[inline]
     pub fn get_registers(&self) -> Result<kvm_regs> {
         self.cpu.get_regs().map_err(|err| VmError::Kvm(err))
     }
 
-    #[inline]
     /// Installs a coverage point (breakpoint). Returns true if the breakpoint was
     /// inserted, false if it already existed.
+    #[inline]
     pub fn add_coverage_point(&mut self, addr: u64) -> Result<bool> {
         if self.coverage_points.contains_key(&addr) {
             return Ok(false);
@@ -337,8 +350,8 @@ impl Vm {
 
             match vmexit {
                 VcpuExit::Debug => {
-                    if let Some(orig_byte) = self.coverage_points.get(&regs.rip) {
-                        self.memory.write(regs.rip, &[*orig_byte])?;
+                    if let Some(&orig_byte) = self.coverage_points.get(&regs.rip) {
+                        self.memory.write(regs.rip, &[orig_byte])?;
                         self.coverage.push(regs.rip);
                     } else {
                         break VmExit::Breakpoint(regs.rip);
@@ -428,13 +441,13 @@ mod tests {
         // Create the vm
         let kvm = Kvm::new()?;
         let mut vm = Vm::new(&kvm, memory)?;
-        let original_vm = vm.fork(&kvm)?;
 
         // Initialize registers
         let mut regs = vm.get_initial_regs();
         regs.rip = 0x1337000;
         vm.set_initial_regs(regs);
         vm.commit_registers()?;
+        let original_vm = vm.fork(&kvm)?;
 
         // Add breakpoints
         let breakpoints: Vec<u64> = vec![0x1337000, 0x1337003];
