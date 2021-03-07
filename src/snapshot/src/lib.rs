@@ -1,5 +1,10 @@
+//! Snapshot Library
+
+#![warn(missing_docs)]
+
 use serde::de;
 use serde::{Deserialize, Deserializer};
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -7,9 +12,12 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
+/// Errors that can be thrown by the library
 #[derive(Debug)]
 pub enum SnapshotError {
+    /// Error occured during file manipulation
     FileError(std::io::Error),
+    /// Error occured during parsing
     ParsingError,
 }
 
@@ -73,6 +81,7 @@ pub struct Mapping {
 }
 
 impl Mapping {
+    /// Returns the size of the mapping area
     pub fn size(&self) -> usize {
         (self.end - self.start) as usize
     }
@@ -103,6 +112,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Create a new `Snapshot` instance
     pub fn new<P: AsRef<Path>>(p: P) -> Result<Snapshot> {
         let path = p.as_ref();
         let info_file = File::open(path)?;
@@ -130,7 +140,6 @@ impl Snapshot {
         if let Some(root) = folder_path {
             pb.push(root);
         }
-
         pb.push(snapshot.memory_file.to_owned());
 
         let memory = File::open(pb)?;
@@ -149,19 +158,18 @@ impl Snapshot {
         self.mappings.iter().map(|x| x.size()).sum()
     }
 
+    /// Read a region of the snapshot
     pub fn read(&self, pa: u64, size: usize) -> Option<Vec<u8>> {
-        if let Some(file_cell) = &self.file {
-            let mut file = file_cell.borrow_mut();
-            file.seek(SeekFrom::Start(pa)).ok()?;
-            let mut result: Vec<u8> = vec![0; size];
+        let file_cell = self.file.as_ref()?;
 
-            let read_size = file.read(result.as_mut_slice()).ok()?;
-            result.resize(read_size, 0);
+        let mut file = file_cell.borrow_mut();
+        file.seek(SeekFrom::Start(pa)).ok()?;
 
-            Some(result)
-        } else {
-            None
-        }
+        let mut result: Vec<u8> = vec![0; size];
+        let read_size = file.read(result.as_mut_slice()).ok()?;
+        result.resize(read_size, 0);
+
+        Some(result)
     }
 }
 
