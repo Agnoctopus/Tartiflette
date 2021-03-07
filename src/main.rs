@@ -2,12 +2,7 @@
 
 #![warn(missing_docs)]
 
-mod cli;
-mod config;
-mod vm;
-
-#[allow(unused)]
-use kvm_ioctls::{Kvm, VcpuFd, VmFd};
+use kvm_ioctls::Kvm;
 use memory::{PagePermissions, VirtualMemory};
 use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::unistd::Pid;
@@ -16,8 +11,7 @@ use snapshot::Snapshot;
 use std::thread;
 use std::time::Duration;
 
-use config::Config;
-use vm::{Vm, VmExit};
+use tartiflette::vm::Vm;
 
 const ASM_64_SHELLCODE: &[u8] = &[0xeb, 0xfe]; // jmp 0x0
 
@@ -26,20 +20,7 @@ extern "C" fn vm_tock(_: i32) {
     println!("VM TOCK");
 }
 
-fn run_snapshot(kvm: &Kvm, config: Config) {
-    let mut snapshot = Snapshot::new(config.snapshot.unwrap()).expect("snapshot loading failed");
-
-    let snapshot_size = snapshot.size();
-    println!("Snapshot size: {}", snapshot_size);
-
-    let mut vm = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
-
-    // Run the vm
-    let result = vm.run().expect("Run failed");
-    println!("Exit status: {:x?}", result);
-}
-
-fn run(config: Config) {
+fn setup_timer() {
     // Setup exception handler
     let sigstuff = SigAction::new(
         SigHandler::Handler(vm_tock),
@@ -49,9 +30,39 @@ fn run(config: Config) {
 
     unsafe { sigaction(Signal::SIGUSR2, &sigstuff) }.unwrap();
 
+    // Start timer thread to interrupt vm
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(1000));
+        kill(Pid::from_raw(0), Signal::SIGUSR2).unwrap();
+    });
+}
+
+/// Run a VM from a `snapshot`
+fn run_snapshot(snapshot: String) {
     // Instantiate KVM
     let kvm = Kvm::new().expect("Failed to instantiate KVM");
     assert!(kvm.get_api_version() >= 12);
+    setup_timer();
+
+    // Retrieve the snapsh9ot
+    let mut snapshot = Snapshot::new(snapshot).expect("snapshot loading failed");
+    let snapshot_size = snapshot.size();
+    println!("Snapshot size: {}", snapshot_size);
+
+    // Setup the VM
+    let mut vm = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+
+    // Run the vm
+    let result = vm.run().expect("Run failed");
+    println!("Exit status: {:x?}", result);
+}
+
+/// Run some shellcode
+fn run() {
+    // Instantiate KVM
+    let kvm = Kvm::new().expect("Failed to instantiate KVM");
+    assert!(kvm.get_api_version() >= 12);
+    setup_timer();
 
     // Setup virtual memory
     let mut vm_mem = VirtualMemory::new(512 * 0x1000).expect("Could not allocate Vm memory");
@@ -73,19 +84,9 @@ fn run(config: Config) {
     vm.commit_registers()
         .expect("Failed to commit VM registres");
 
-    // Start timer thread to interrupt vm
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(1000));
-        kill(Pid::from_raw(0), Signal::SIGUSR2).unwrap();
-    });
-
     // Run the vm
     let result = vm.run().expect("Run failed");
     println!("Exit status: {:x?}", result);
-
-    if config.snapshot.is_some() {
-        run_snapshot(&kvm, config);
-    }
 }
 
 /// Main function
@@ -94,14 +95,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let args: Vec<&str> = args.iter().map(String::as_ref).collect();
 
-    // Parse the command line
-    match cli::CLI::parse(args) {
-        Ok(config) => {
-            run(config);
-        }
-        Err(error) => {
-            eprintln!("Error while parsing the command line.");
-            eprint!("{}", error)
-        }
+    if args.len() >= 2 {
+        run_snapshot(args[1].to_string());
+    } else {
+        run();
     }
 }

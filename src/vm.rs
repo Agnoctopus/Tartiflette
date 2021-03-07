@@ -11,7 +11,7 @@ use kvm_ioctls;
 use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
 use nix::errno::Errno;
 
-use memory::{paging::PageTable, MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
+use memory::{MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
 use snapshot::Snapshot;
 
 type Result<T> = std::result::Result<T, VmError>;
@@ -84,6 +84,7 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Create a new `Vm` instance
     pub fn new(kvm: &Kvm, memory: VirtualMemory) -> Result<Vm> {
         // Create the vm file descriptor
         let vm_fd = kvm.create_vm()?;
@@ -349,7 +350,7 @@ impl Vm {
         Ok(result)
     }
 
-    // Creates a copy of the current Vm state
+    /// Creates a copy of the current Vm state
     pub fn fork(&self, kvm: &Kvm) -> Result<Self> {
         // Copy the initial memory state
         let memory = self.memory.clone()?;
