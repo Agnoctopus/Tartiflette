@@ -21,6 +21,7 @@ impl CLI {
                 Arg::with_name("input")
                     .short("i")
                     .long("input")
+                    .required(true)
                     .takes_value(true)
                     .help("Path to a directory containing initial corpus"),
             )
@@ -145,7 +146,6 @@ impl CLI {
             .map_err(|error| format!("{}", error))?;
 
         // Create the program `Config`
-        let config = Config::try_from(&matches).unwrap();
-        Ok(config)
+        Ok(Config::try_from(&matches).unwrap())
     }
 }

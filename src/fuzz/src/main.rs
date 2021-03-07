@@ -10,13 +10,13 @@ mod mangle;
 mod random;
 
 extern crate bits;
-
-use crate::input::input_init;
+extern crate tartiflette;
 
 use std::path::Path;
 
 use chrono::Local;
-use config::Config;
+
+use crate::config::Config;
 
 fn check_sig(config: &mut Config) {
     let exe_path = Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
@@ -42,21 +42,10 @@ fn check_sig(config: &mut Config) {
     }
 }
 
-/// Launch the program
-fn launch(mut config: Config) {
-    let cmdline = config
-        .exe_config
-        .cmdline
-        .as_ref()
-        .expect("No command line provided");
+fn launch_program(mut config: Config) {
+    let cmdline = config.exe_config.cmdline.as_ref().unwrap();
     assert!(cmdline.len() > 0);
-    assert!(std::path::Path::new(&cmdline[0]).exists());
 
-    let localtime = Local::now();
-    println!(
-        "Start time: {}",
-        localtime.format("%Y-%m-%d %H:%M:%S").to_string()
-    );
     println!(
         "Program command line: {}",
         config
@@ -67,22 +56,42 @@ fn launch(mut config: Config) {
             .as_deref()
             .unwrap_or("")
     );
-    println!("Input: {}", config.io_config.input_dir);
-    println!("Ouput: {}", config.io_config.output_dir);
-    println!("Minimize: {}", config.app_config.minimize);
-    println!("Jobs: {}", config.app_config.jobs);
+    check_sig(&mut config);
 
-    if let Err(error) = input_init(&mut config) {
+    todo!();
+}
+
+fn launch_snapshot(mut config: Config) {
+    if let Err(error) = input::input_init(&mut config) {
         eprintln!("{}", error);
         return;
     }
 
-    if let Err(error) = config.validate() {
-        eprintln!("Failed to validate the configuration: {}", error);
-    }
-    check_sig(&mut config);
-
     fuzz::fuzz(config);
+}
+
+/// Launch the program
+fn launch(mut config: Config) {
+    if let Err(error) = config.validate() {
+        eprintln!("Failed to validate the configuration.");
+        eprintln!("{}", error);
+        return;
+    }
+
+    let localtime = Local::now();
+    let start_time = localtime.format("%Y-%m-%d %H:%M:%S").to_string();
+    println!("Start time: {}", start_time);
+    println!("Input: {}", config.io_config.input_dir);
+    println!("Ouput: {}", config.io_config.output_dir);
+    println!("Jobs: {}", config.app_config.jobs);
+
+    if config.exe_config.cmdline.is_some() {
+        launch_program(config);
+    } else if config.exe_config.snapshot.is_some() {
+        launch_snapshot(config);
+    } else {
+        eprintln!("Nothing to do.");
+    }
 }
 
 /// Main function
@@ -95,7 +104,6 @@ fn main() {
     match cli::CLI::parse(args) {
         Ok(config) => launch(config),
         Err(error) => {
-            eprintln!("Error while parsing the command line.");
             eprintln!("{}", error)
         }
     }

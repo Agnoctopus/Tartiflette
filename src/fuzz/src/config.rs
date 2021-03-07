@@ -128,6 +128,21 @@ pub struct ExeConfig {
 impl ExeConfig {
     /// Validate the `ExeConfig`
     pub fn validate(&mut self) -> Result<(), String> {
+        if let Some(program) = self.cmdline.as_ref().map(|args| Path::new(&args[0])) {
+            if !program.exists() {
+                return Err(format!("Specified program {:?}, does not exists", program));
+            }
+        }
+
+        if let Some(snapshot) = self.snapshot.as_ref().map(|pathname| Path::new(pathname)) {
+            if !snapshot.exists() {
+                return Err(format!(
+                    "Specified snapshot {:?}, does not exists",
+                    snapshot
+                ));
+            }
+        }
+
         Ok(())
     }
 }
