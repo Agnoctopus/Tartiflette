@@ -11,8 +11,8 @@ keywords = ["fuzzer", "fuzzing", "kvm", "virtualisation"]
 description= "Fuzz program inside KVM hypervisor binded with Honggfuzz"
 
 [dependencies]
-kvm-ioctls = "0.6.0"
-kvm-bindings = "0.3.0"
+kvm-ioctls = "0.6.1"
+kvm-bindings = "0.3.1"
 clap = "2.33.3"
 nix = "0.20.0"
 memory = { path = "src/memory" }
