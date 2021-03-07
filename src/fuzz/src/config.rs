@@ -39,7 +39,7 @@ pub struct IOConfig {
 }
 
 impl IOConfig {
-    /// Valide the `IOConfig`
+    /// Validate the `IOConfig`
     pub fn validate(&mut self) -> Result<(), String> {
         let input_dir = Path::new(&self.input_dir);
         if !input_dir.exists() {
@@ -110,16 +110,23 @@ impl TryFrom<&ArgMatches<'_>> for IOConfig {
     }
 }
 
+/// Config regarding execution
 #[derive(Debug)]
 pub struct ExeConfig {
+    /// Command line of a program to fuzz
     pub cmdline: Option<Vec<String>>,
+    /// Snapshot to fuzz
+    pub snapshot: Option<String>,
+    /// Mutation command line
     pub mutation_cmdline: Option<String>,
+    /// Post mutation command line
     pub post_mutation_cmdline: Option<String>,
+    /// Mutation command line on cov file
     pub fb_mutation_cmdline: Option<String>,
 }
 
 impl ExeConfig {
-    /// Valide the `ExeConfig`
+    /// Validate the `ExeConfig`
     pub fn validate(&mut self) -> Result<(), String> {
         Ok(())
     }
@@ -135,6 +142,7 @@ impl TryFrom<&ArgMatches<'_>> for ExeConfig {
 
         Ok(Self {
             cmdline: cmdline,
+            snapshot: matches.value_of("snapshot").map(String::from),
             mutation_cmdline: matches.value_of("mutation_cmdline").map(String::from),
             post_mutation_cmdline: matches.value_of("post_mutation_cmdline").map(String::from),
             fb_mutation_cmdline: matches.value_of("fb_mutation_cmdline").map(String::from),
@@ -142,24 +150,39 @@ impl TryFrom<&ArgMatches<'_>> for ExeConfig {
     }
 }
 
+/// Config regarding the application
 #[derive(Debug)]
 pub struct AppConfig {
+    /// Verbose level
     pub verbose: u64,
+    /// Number of jobs to use
     pub jobs: usize,
+    /// Minimisze mode
     pub minimize: bool,
-    pub feedback_method: fuzz::FeedBackMethod,
+    /// Persisten mode
     pub persistent: bool,
+    /// Use the net driver
     pub netdriver: bool,
+    /// Feedback method used
+    pub feedback_method: fuzz::FeedBackMethod,
+    /// Exit on crash
     pub crash_exit: bool,
+    /// Mutation per run
     pub mutation_per_run: usize,
+    /// Number of mutation
     pub mutation_num: Option<usize>,
+    /// Use of socket fuzzer
     pub socket_fuzzer: bool,
+    /// Timeout in second used
     pub timeout: usize,
+    /// Maximum input size
     pub max_input_size: usize,
+    /// Use random ascii
     pub random_ascii: bool,
 }
 
 impl AppConfig {
+    /// Validate the `AppConfig`
     pub fn validate(&mut self) -> Result<(), String> {
         if self.socket_fuzzer {
             self.timeout = 0;
@@ -213,7 +236,7 @@ impl TryFrom<&ArgMatches<'_>> for AppConfig {
 }
 
 #[derive(Debug)]
-// Global configuration
+/// Global configuration
 pub struct Config {
     /// I/O configuration
     pub io_config: IOConfig,
@@ -224,9 +247,10 @@ pub struct Config {
 }
 
 impl Config {
+    /// Validate the `IOConfig`
     pub fn validate(&mut self) -> Result<(), String> {
-        self.exe_config.validate();
-        self.app_config.validate();
+        self.exe_config.validate()?;
+        self.app_config.validate()?;
         self.io_config.validate()
     }
 }

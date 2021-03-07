@@ -127,6 +127,12 @@ impl CLI {
                     .help("Mutation command line on effective cov feedback files"),
             )
             .arg(
+                Arg::with_name("snapshot")
+                    .long("snapshot")
+                    .takes_value(true)
+                    .help("Snapshot file to use"),
+            )
+            .arg(
                 Arg::with_name("program")
                     .multiple(true)
                     .last(true)
