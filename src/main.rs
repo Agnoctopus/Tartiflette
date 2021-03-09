@@ -14,7 +14,7 @@ use snapshot::Snapshot;
 
 use tartiflette::vm::Vm;
 
-const ASM_64_SHELLCODE: &[u8] = &[0xeb, 0xfe]; // jmp 0x0
+const ASM_64_SHELLCODE: &[u8] = &[0x50, 0x90, 0xcd, 0x06]; // int 6
 
 extern "C" fn vm_tock(_: i32) {
     // No-op
@@ -73,6 +73,13 @@ fn run() {
     vm_mem
         .write(0x1337000, ASM_64_SHELLCODE)
         .expect("Failed to write shellcode");
+    vm_mem
+        .mmap(
+            0x1331000,
+            0x1000,
+            PagePermissions::READ | PagePermissions::WRITE,
+        )
+        .expect("Failed to map stack memory");
 
     // Setup virtual machine
     let mut vm = Vm::new(&kvm, vm_mem).expect("Failed to instantiate a new VM");
@@ -81,6 +88,8 @@ fn run() {
     regs.rip = 0x1337000;
     regs.rax = 0x1000;
     regs.rdx = 0x337;
+    regs.rsp = 0x1331500;
+    regs.rflags = 1 << 9; // IF
     vm.set_initial_regs(regs);
     vm.commit_registers()
         .expect("Failed to commit VM registres");

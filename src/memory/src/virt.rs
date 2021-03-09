@@ -92,6 +92,11 @@ impl VirtualMemory {
         self.get_page_pa(address).is_some()
     }
 
+    /// Returns the physical address of a page if it exists
+    pub fn pa(&self, addr: u64) -> Option<u64> {
+        self.get_page_pa(VirtAddr::new(addr)).map(|x| x as u64)
+    }
+
     /// Reads data from the virtual address space
     pub fn read(&self, addr: u64, output: &mut [u8]) -> Result<()> {
         // Compute the range of pages between VA and VA + read_size

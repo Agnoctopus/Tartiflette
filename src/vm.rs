@@ -66,6 +66,111 @@ fn string_perms_to_perms(perms: &str) -> PagePermissions {
 }
 
 /// Temporary implementation
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug)]
+struct Idt64Entry {
+    /// First part of the handler offset
+    offset_0: u16,
+    /// Segment selector to use
+    segment_selector: u16,
+    /// Entry flags (present, DPL, type, IST)
+    flags: u16,
+    /// Second part of the offset
+    offset_1: u16,
+    /// Last part of the offset
+    offset_2: u32,
+    /// Reserved (should be 0 ?)
+    reserved: u64,
+}
+
+impl Idt64Entry {
+    pub fn new() -> Self {
+        Idt64Entry {
+            offset_0: 0,
+            segment_selector: 0,
+            flags: 0,
+            offset_1: 0,
+            offset_2: 0,
+            reserved: 0,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Dpl {
+    Ring0 = 0,
+    Ring3 = 3,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Idt64EntryType {
+    Interrupt = 0b1110,
+    Trap = 0b1111,
+}
+
+struct Idt64EntryBuilder {
+    offset: u64,
+    segment_selector: u16,
+    ist: u8,
+    dpl: Dpl,
+    gate_type: Idt64EntryType,
+}
+
+impl Idt64EntryBuilder {
+    pub fn new() -> Self {
+        Idt64EntryBuilder {
+            offset: 0,
+            segment_selector: 0,
+            ist: 0,
+            dpl: Dpl::Ring0,
+            gate_type: Idt64EntryType::Interrupt,
+        }
+    }
+
+    pub fn offset(&mut self, offset: u64) -> &mut Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn ist(&mut self, ist: u8) -> &mut Self {
+        assert!(ist <= 7, "IST mut be in the range 0-7, got {}", ist);
+        self.ist = ist;
+        self
+    }
+
+    pub fn dpl(&mut self, dpl: Dpl) -> &mut Self {
+        self.dpl = dpl;
+        self
+    }
+
+    pub fn segment_selector(&mut self, segment: u16) -> &mut Self {
+        self.segment_selector = segment;
+        self
+    }
+
+    pub fn gate_type(&mut self, gate_type: Idt64EntryType) -> &mut Self {
+        self.gate_type = gate_type;
+        self
+    }
+
+    pub fn collect(&self) -> Idt64Entry {
+        let mut flags: u16 = 1 << 15; // Present
+        flags |= (self.dpl as u16) << 13; // Dpl
+        flags |= (self.gate_type as u16) << 8; // Gate Type
+        flags |= self.ist as u16;
+
+        Idt64Entry {
+            offset_0: (self.offset & 0xffff) as u16,
+            segment_selector: self.segment_selector,
+            flags: flags,
+            offset_1: ((self.offset >> 16) & 0xffff) as u16,
+            offset_2: ((self.offset >> 32) & 0xffffffff) as u32,
+            reserved: 0,
+        }
+    }
+}
+
+/// Temporary implementation
 pub struct Vm {
     /// kvm vm file descriptor
     vm: VmFd,
@@ -164,7 +269,7 @@ impl Vm {
 
         vm_vcpu_fd.set_guest_debug(&dregs)?;
 
-        Ok(Vm {
+        let vm = Vm {
             vm: vm_fd,
             cpu: vm_vcpu_fd,
             memory: memory,
@@ -172,7 +277,58 @@ impl Vm {
             sregs: sregs,
             coverage: Vec::new(),
             coverage_points: BTreeMap::new(),
-        })
+        };
+
+        // Finally, we setup the idt, tss and exception handlers
+        vm.setup_exception_handling()
+    }
+
+    fn setup_exception_handling(mut self) -> Result<Vm> {
+        // TODO: Change this to an option or something
+        const IDT_ADDRESS: u64 = 0xffffffffffa00000;
+        const HANDLERS_ADDR: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
+
+        // Handlers setup
+        self.memory.mmap(
+            HANDLERS_ADDR,
+            PAGE_SIZE,
+            PagePermissions::READ | PagePermissions::EXECUTE,
+        )?;
+
+        const SHELLCODE: &[u8] = &[
+            0x48, 0xc7, 0xc0, 0x37, 0x13, 0x03, 0x00, // mov rax, 0x31337
+            0x0f, 0x01, 0xc1, // vmcall
+        ];
+
+        self.memory.write(HANDLERS_ADDR, SHELLCODE)?;
+
+        // IDT Setup
+        self.memory
+            .mmap(IDT_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
+
+        let mut entries: [Idt64Entry; 32] = [Idt64Entry::new(); 32];
+        let entries_size = entries.len() * std::mem::size_of::<Idt64Entry>();
+
+        // Redirect everything to our vmcall as a test
+        for i in 0..32 {
+            entries[i] = Idt64EntryBuilder::new()
+                .offset(HANDLERS_ADDR)
+                .dpl(Dpl::Ring0)
+                .segment_selector(self.sregs.cs.selector)
+                .gate_type(Idt64EntryType::Trap)
+                .collect();
+        }
+
+        self.sregs.idt.base = IDT_ADDRESS;
+        self.sregs.idt.limit = (entries_size - 1) as u16;
+
+        // Write the handlers to memory
+        let entries_data: &[u8] =
+            unsafe { std::slice::from_raw_parts(entries.as_ptr() as *const u8, entries_size) };
+
+        self.memory.write(IDT_ADDRESS, entries_data)?;
+
+        Ok(self)
     }
 
     /// Creates a Virtual machine from a given snapshot
