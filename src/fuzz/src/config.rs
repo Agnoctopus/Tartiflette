@@ -1,8 +1,11 @@
 //! Configuration
 
-use crate::fuzz;
-use clap::ArgMatches;
 use std::{convert::TryFrom, fs, path::Path};
+
+use clap::ArgMatches;
+
+use crate::feedback::FeedBackMethod;
+use crate::fuzz;
 
 /// Persistent-binary signature - if found within file, it means it's a persistent mode binary
 pub const PERSISTENT_SIG: &[u8] = b"\x01_LIBHFUZZ_PERSISTENT_BINARY_SIGNATURE_\x02\xFF";
@@ -179,7 +182,7 @@ pub struct AppConfig {
     /// Use the net driver
     pub netdriver: bool,
     /// Feedback method used
-    pub feedback_method: fuzz::FeedBackMethod,
+    pub feedback_method: FeedBackMethod,
     /// Exit on crash
     pub crash_exit: bool,
     /// Mutation per run
@@ -194,6 +197,8 @@ pub struct AppConfig {
     pub max_input_size: usize,
     /// Use random ascii
     pub random_ascii: bool,
+    /// Constant integer/string fuzzed programs value for mangling
+    pub cmp_feedback: bool,
 }
 
 impl AppConfig {
@@ -226,7 +231,7 @@ impl TryFrom<&ArgMatches<'_>> for AppConfig {
             verbose: matches.occurrences_of("verbose"),
             jobs: matches.value_of("jobs").unwrap().parse::<usize>().unwrap(),
             minimize: matches.is_present("minimize"),
-            feedback_method: fuzz::FeedBackMethod::SOFT,
+            feedback_method: FeedBackMethod::SOFT,
             persistent: matches.is_present("persistent"),
             netdriver: matches.is_present("netdriver"),
             crash_exit: matches.is_present("crash_exit"),
@@ -246,6 +251,11 @@ impl TryFrom<&ArgMatches<'_>> for AppConfig {
                 .unwrap(),
             max_input_size: 0,
             random_ascii: matches.is_present("random_ascii"),
+            cmp_feedback: matches
+                .value_of("cmp_feedback")
+                .ok_or(ConfigError::Required("cmp_feedback".to_string()))?
+                .parse()
+                .or(Err(ConfigError::Conversion("cmp_feedback".to_string())))?,
         })
     }
 }

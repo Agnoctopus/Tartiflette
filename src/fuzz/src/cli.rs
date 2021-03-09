@@ -88,6 +88,16 @@ impl CLI {
                     .help("Number of mutations to do"),
             )
             .arg(
+                Arg::with_name("cmp_feedback")
+                    .long("cmp_feedback")
+                    .takes_value(true)
+                    .default_value("false")
+                    .help(
+                        "Use constant integer/string values from fuzzed programs
+                           to mangle input files via a dynamic dictionary",
+                    ),
+            )
+            .arg(
                 Arg::with_name("crash_exit")
                     .long("crash_exit")
                     .help("Exit on crash"),

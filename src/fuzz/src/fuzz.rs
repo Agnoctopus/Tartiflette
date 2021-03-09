@@ -1,6 +1,8 @@
 //! Fuzz
 
+use crate::corpus::{Corpus, FuzzCov};
 use crate::random::Rand;
+use crate::{app::App, corpus::FuzzInput};
 use crate::{config::Config, input::input_get_entries};
 use crate::{input::INPUT_MIN_SIZE, mangle};
 use core::{num, panic};
@@ -22,6 +24,10 @@ use std::{
     time::Instant,
 };
 
+use crate::app::Mode;
+use crate::dico::Dico;
+use crate::feedback::FeedBackMethod;
+
 use bits::BitField;
 use chrono::{DateTime, Local};
 use thread::sleep;
@@ -31,269 +37,14 @@ const MASAN_COMMON_FLAGS: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:
 const kSAN_REGULAR: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=1:handle_segv=0:handle_sigbus=0:handle_abort=0:handle_sigill=0:handle_sigfpe=0:abort_on_error=1";
 
 #[derive(Debug)]
-pub struct Corpus {
-    files: Vec<FuzzFile>,
-    filenames: BTreeMap<String, FuzzCov>,
-}
-
-#[derive(Debug)]
-pub struct Dico {
-    pub data: [u8; 256],
-    pub len: usize,
-}
-
-impl Default for Dico {
-    fn default() -> Self {
-        Self {
-            data: [0; 256],
-            len: 0,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct FeedBackMap {
-    pub val: [u8; 32],
-    pub len: usize,
-}
-
-impl Corpus {
-    pub fn new() -> Self {
-        Self {
-            files: Vec::new(),
-            filenames: BTreeMap::new(),
-        }
-    }
-
-    pub fn add_file(&mut self, file: FuzzFile) {
-        assert!(self.filenames.insert(file.path.clone(), file.cov).is_none());
-        let index = match self
-            .files
-            .binary_search_by(|other| other.cov.cmp(&file.cov))
-        {
-            Ok(index) => index,
-            Err(index) => index,
-        };
-        self.files.insert(index, file);
-    }
-
-    pub fn contains(&self, path: &str) -> bool {
-        self.filenames.contains_key(path)
-    }
-
-    pub fn iter_from(&self, path: &str) -> std::slice::Iter<FuzzFile> {
-        let cov = self.filenames.get(path).unwrap();
-        let index = match self.files.binary_search_by(|other| other.cov.cmp(cov)) {
-            Ok(index) => index,
-            Err(index) => index,
-        };
-        let nb = self.files[index..]
-            .iter()
-            .enumerate()
-            .find(|&(_, file)| file.path == path)
-            .map(|(index, file)| index)
-            .unwrap();
-
-        self.files[nb..].iter()
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<FuzzFile> {
-        self.files.iter()
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(usize)]
-enum FuzzState {
-    Unset = 0,
-    Static,
-    DynamicDryRun,
-    DynamicMain,
-    DynamicMinimize,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct FeedBackMethod(u32);
-
-impl FeedBackMethod {
-    pub const NONE: FeedBackMethod = FeedBackMethod(0);
-    pub const INSTRUCTION_COUNTING: FeedBackMethod = FeedBackMethod(1);
-    pub const BRANCH_COUNTING: FeedBackMethod = FeedBackMethod(2);
-    pub const BRANCH_TRACE_STORE: FeedBackMethod = FeedBackMethod(4);
-    pub const PT: FeedBackMethod = FeedBackMethod(8);
-    pub const SOFT: FeedBackMethod = FeedBackMethod(16);
-
-    const INSTRUCTION_COUNTING_BIT: usize = 1;
-    const BRANCH_COUNTING_BIT: usize = 2;
-    const BRANCH_TRACE_STORE_BIT: usize = 3;
-    const PT_BIT: usize = 4;
-    const SOFT_BIT: usize = 5;
-}
-
-impl FeedBackMethod {
-    pub fn new(val: u32) -> Self {
-        Self(val)
-    }
-}
-
-impl core::ops::BitOr<FeedBackMethod> for FeedBackMethod {
-    type Output = Self;
-
-    #[inline]
-    fn bitor(self, rhs: FeedBackMethod) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl core::ops::BitOrAssign<FeedBackMethod> for FeedBackMethod {
-    #[inline]
-    fn bitor_assign(&mut self, rhs: FeedBackMethod) {
-        *self = *self | rhs;
-    }
-}
-
-#[derive(Debug)]
-pub struct App {
-    pub config: Config,
-    start_datatime: DateTime<Local>,
-    pub start_instant: Instant,
-    job_active_count: AtomicUsize,
-    mutations_count: AtomicUsize,
-    crashes_count: AtomicUsize,
-    fuzz_state: AtomicUsize,
-    exe_data: Vec<u8>,
-    pub corpus: Mutex<Corpus>,
-    tested_file_count: AtomicUsize,
-    pub last_cov_update: AtomicUsize,
-    mutex: Mutex<()>,
-    switching_feedback: AtomicBool,
-    terminated_elapsed: AtomicUsize,
-    pub fuzz_file_count: AtomicUsize,
-    max_cov: Mutex<FuzzCov>,
-    fuzz_file_max_size: Mutex<usize>,
-    new_units_added: AtomicUsize,
-    pub current_file: Mutex<Option<String>>,
-    pub dic_count: AtomicUsize,
-    pub dico: Mutex<[Dico; 1024]>,
-    pub feedback_maps: Mutex<Vec<FeedBackMap>>,
-}
-
-impl App {
-    #[inline]
-    pub fn get_fuzz_state(&self) -> FuzzState {
-        unsafe { transmute::<usize, FuzzState>(self.fuzz_state.load(Ordering::Relaxed)) }
-    }
-
-    #[inline]
-    pub fn set_fuzz_state(&self, fuzz_state: FuzzState) {
-        self.fuzz_state
-            .store(fuzz_state as usize, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn is_terminating(&self) -> bool {
-        self.terminated_elapsed.load(Ordering::Relaxed) > 0
-    }
-
-    #[inline]
-    pub fn set_terminating_to(&self, elapsed: usize) {
-        if self.is_terminating() {
-            return;
-        }
-        self.terminated_elapsed.store(elapsed, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn set_terminating(&self) {
-        if self.is_terminating() {
-            return;
-        }
-        self.terminated_elapsed.store(
-            self.start_instant.elapsed().as_secs() as usize,
-            Ordering::Relaxed,
-        );
-    }
-
-    #[inline]
-    pub fn should_terminate(&self) -> bool {
-        let elapsed = self.terminated_elapsed.load(Ordering::Relaxed);
-        self.start_instant.elapsed().as_secs() as usize > elapsed
-    }
-}
-
-#[derive(Debug)]
 pub struct FuzzCase {
     pub pid: usize,
     pub start_instant: Instant,
-    pub input: FuzzFile,
+    pub input: FuzzInput,
     pub static_file_try_more: bool,
     pub mutations_per_run: usize,
     pub rand: Rand,
     pub tries: usize,
-}
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
-pub struct FuzzCov([usize; 4]);
-
-impl FuzzCov {
-    pub fn compute_local_max(&self, other: &Self) -> Self {
-        let mut cov = Self::default();
-        cov.0[0] = cmp::max(self.0[0], other.0[0]);
-        cov.0[1] = cmp::max(self.0[1], other.0[1]);
-        cov.0[2] = cmp::max(self.0[2], other.0[2]);
-        cov.0[3] = cmp::max(self.0[3], other.0[3]);
-
-        cov
-    }
-}
-
-#[derive(Debug)]
-pub struct FuzzFile {
-    pub path: String,
-
-    pub data: Vec<u8>,
-    pub size: usize,
-
-    pub cov: FuzzCov,
-    pub idx: usize,
-    pub refs: u32,
-
-    pub exec_usec: usize,
-}
-
-impl Default for FuzzFile {
-    fn default() -> Self {
-        Self {
-            path: String::from(""),
-            data: Vec::new(),
-            size: 0,
-            cov: FuzzCov::default(),
-            idx: 0,
-            refs: 0,
-            exec_usec: 0,
-        }
-    }
-}
-
-impl FuzzFile {
-    pub fn generate_file_name(&self) -> String {
-        format!(
-            "{:x}.{:x}.cov",
-            md5::compute(&self.data[..self.size]),
-            self.data.len()
-        )
-    }
-
-    pub fn fork(&self, exec_usec: usize, app: &App) -> Self {
-        Self {
-            path: self.generate_file_name(),
-            data: self.data.clone(),
-            size: self.size,
-            cov: self.cov,
-            idx: app.fuzz_file_count.fetch_add(1, Ordering::Relaxed),
-            refs: 0,
-            exec_usec: exec_usec,
-        }
-    }
 }
 
 impl FuzzCase {
@@ -312,8 +63,8 @@ impl FuzzCase {
     }
 }
 
-fn write_cov_file(dir: &str, file: &FuzzFile) {
-    let file_name = file.generate_file_name();
+fn write_cov_file(dir: &str, file: &FuzzInput) {
+    let file_name = file.generate_filename();
     let file_path_name = format!("{}/{}", dir, file_name);
     let file_path = std::path::Path::new(&file_path_name);
 
@@ -331,8 +82,8 @@ fn write_cov_file(dir: &str, file: &FuzzFile) {
 }
 
 fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
-    app.last_cov_update.store(
-        app.start_instant.elapsed().as_secs() as usize,
+    app.metrics.last_cov_update.store(
+        app.metrics.start_instant.elapsed().as_secs() as usize,
         Ordering::Relaxed,
     );
     let fuzz_file = case
@@ -347,7 +98,7 @@ fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
 
     // Max fuzz file size
     {
-        let mut max_size = app.fuzz_file_max_size.lock().unwrap();
+        let mut max_size = app.metrics.fuzz_input_max_size.lock().unwrap();
         *max_size = cmp::max(*max_size, fuzz_file.size);
     }
 
@@ -366,15 +117,14 @@ fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
     }
 
     // No need to add files to the new coverage dir, if it's not the main phase
-    if app.get_fuzz_state() != FuzzState::DynamicMain {
+    if app.get_mode() != Mode::DynamicMain {
         return;
     }
 
-    app.new_units_added.fetch_add(1, Ordering::Relaxed);
+    app.metrics.new_units_added.fetch_add(1, Ordering::Relaxed);
 
     if false {
-        unimplemented!();
-        // TODO covdirnew
+        todo!("covdir new");
     }
 }
 
@@ -387,9 +137,9 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
     static COUNT: AtomicUsize = AtomicUsize::new(0);
     COUNT.fetch_add(1, Ordering::Relaxed);
 
-    let _lock = app.mutex.lock().unwrap();
+    // TODO let _lock = app.mutex.lock().unwrap();
 
-    if app.get_fuzz_state() != FuzzState::DynamicDryRun {
+    if app.get_mode() != Mode::DynamicDryRun {
         // Already switched out of the Dry Run
         return;
     }
@@ -412,7 +162,7 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
 
     if app.config.app_config.minimize {
         println!("Entering phase 3/3: Coprus minimization");
-        app.set_fuzz_state(FuzzState::DynamicMinimize);
+        app.set_mode(Mode::DynamicMinimize);
         return;
     }
 
@@ -420,8 +170,8 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
      * If the initial fuzzing yielded no useful coverage, just add a single empty file to the
      * dynamic corpus, so the dynamic phase doesn't fail because of lack of useful inputs
      */
-    if app.fuzz_file_count.load(Ordering::Relaxed) == 0 {
-        let mut fuzz_file = FuzzFile::default();
+    if app.metrics.fuzz_input_count.load(Ordering::Relaxed) == 0 {
+        let mut fuzz_file = FuzzInput::default();
         fuzz_file.path = "[DYNAMIC-0-SIZE]".to_string();
         core::mem::swap(&mut fuzz_file, &mut case.input);
         add_dynamic_input(case, app);
@@ -432,7 +182,10 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
     if app.config.io_config.max_file_size == 0
         && app.config.app_config.max_input_size > INPUT_MIN_SIZE
     {
-        let mut new_size = cmp::max(*app.fuzz_file_max_size.lock().unwrap(), INPUT_MIN_SIZE);
+        let mut new_size = cmp::max(
+            *app.metrics.fuzz_input_max_size.lock().unwrap(),
+            INPUT_MIN_SIZE,
+        );
         new_size = cmp::min(new_size, app.config.app_config.max_input_size);
         println!(
             "Setting maximum input size to {} bytes, previously: {}",
@@ -442,7 +195,7 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
     }
 
     println!("Enteing phase 3/3: Dynamic Main (Feedback driven Mode)");
-    app.set_fuzz_state(FuzzState::DynamicMain);
+    app.set_mode(Mode::DynamicMain);
 }
 
 fn minimize_remove_files(case: &mut FuzzCase) {
@@ -450,7 +203,7 @@ fn minimize_remove_files(case: &mut FuzzCase) {
 }
 
 fn input_should_read_new_file(app: &App, case: &mut FuzzCase) -> bool {
-    if app.get_fuzz_state() != FuzzState::DynamicDryRun {
+    if app.get_mode() != Mode::DynamicDryRun {
         case.set_input_size(app.config.app_config.max_input_size, &app.config);
         return true;
     }
@@ -497,7 +250,9 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
                     break;
                 }
             }
-            app.tested_file_count.fetch_add(1, Ordering::Relaxed);
+            app.metrics
+                .tested_file_count
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -529,14 +284,14 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
 
 fn input_speed_factor(app: &App, case: &mut FuzzCase) -> isize {
     // Slower the input, lower the chance of it being tested
-    let mut avg_usecs_per_input = app.start_instant.elapsed().as_micros() as usize;
-    avg_usecs_per_input /= app.mutations_count.load(Ordering::Relaxed);
+    let mut avg_usecs_per_input = app.metrics.start_instant.elapsed().as_micros() as usize;
+    avg_usecs_per_input /= app.metrics.mutations_count.load(Ordering::Relaxed);
     avg_usecs_per_input /= app.config.app_config.jobs;
     avg_usecs_per_input = avg_usecs_per_input.clamp(1, 1000000);
 
     let mut sample_usecs = case
         .start_instant
-        .saturating_duration_since(app.start_instant)
+        .saturating_duration_since(app.metrics.start_instant)
         .as_micros() as usize;
     sample_usecs = sample_usecs.clamp(1, 1000000);
 
@@ -547,13 +302,13 @@ fn input_speed_factor(app: &App, case: &mut FuzzCase) -> isize {
     }
 }
 
-fn input_skip_factor(app: &App, case: &mut FuzzCase, file: &FuzzFile) -> (isize, isize) {
+fn input_skip_factor(app: &App, case: &mut FuzzCase, file: &FuzzInput) -> (isize, isize) {
     let mut penalty: isize = 0;
     let speed_factor = input_speed_factor(app, case).clamp(-10, 2);
     penalty += speed_factor;
 
     /* Older inputs -> lower chance of being tested */
-    let percentile = (file.idx * 100) / app.fuzz_file_count.load(Ordering::Relaxed);
+    let percentile = (file.idx * 100) / app.metrics.fuzz_input_count.load(Ordering::Relaxed);
     if percentile <= 40 {
         penalty += 2;
     } else if percentile <= 70 {
@@ -583,7 +338,7 @@ fn input_skip_factor(app: &App, case: &mut FuzzCase, file: &FuzzFile) -> (isize,
 }
 
 fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
-    if app.fuzz_file_count.load(Ordering::Relaxed) == 0 {
+    if app.metrics.fuzz_input_count.load(Ordering::Relaxed) == 0 {
         unreachable!();
     }
     let corpus = app.corpus.lock().unwrap();
@@ -640,7 +395,7 @@ fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
 }
 
 fn fuzz_fetch_input(app: &App, case: &mut FuzzCase) -> bool {
-    if app.get_fuzz_state() == FuzzState::DynamicDryRun {
+    if app.get_mode() == Mode::DynamicDryRun {
         case.mutations_per_run = 0;
         if fuzz_prepare_static_file(app, case, true) {
             return true;
@@ -649,12 +404,12 @@ fn fuzz_fetch_input(app: &App, case: &mut FuzzCase) -> bool {
         case.mutations_per_run = app.config.app_config.mutation_per_run;
     }
 
-    if app.get_fuzz_state() == FuzzState::DynamicMinimize {
+    if app.get_mode() == Mode::DynamicMinimize {
         minimize_remove_files(case);
         return false;
     }
 
-    if app.get_fuzz_state() == FuzzState::DynamicMain {
+    if app.get_mode() == Mode::DynamicMain {
         if app.config.exe_config.mutation_cmdline.is_some() {
             unimplemented!();
         } else if app.config.exe_config.fb_mutation_cmdline.is_some() {
@@ -670,8 +425,8 @@ fn fuzz_fetch_input(app: &App, case: &mut FuzzCase) -> bool {
         }
     }
 
-    if app.get_fuzz_state() == FuzzState::Static {
-        panic!();
+    if app.get_mode() == Mode::Static {
+        todo!();
     }
 
     return true;
@@ -689,7 +444,7 @@ fn fuzz_loop(app: &App, case: &mut FuzzCase) {
     case.mutations_per_run = app.config.app_config.mutation_per_run;
 
     if !fuzz_fetch_input(app, case) {
-        if app.config.app_config.minimize && app.get_fuzz_state() == FuzzState::DynamicMinimize {
+        if app.config.app_config.minimize && app.get_mode() == Mode::DynamicMinimize {
             app.set_terminating();
             return;
         }
@@ -706,7 +461,7 @@ fn fuzz_loop(app: &App, case: &mut FuzzCase) {
 }
 
 pub fn worker(app: Arc<App>, id: usize) {
-    app.job_active_count.fetch_add(1, Ordering::Relaxed);
+    app.metrics.job_active_count.fetch_add(1, Ordering::Relaxed);
     println!("Launched fuzzing threads: no {}", id);
 
     let mapname = format!("tf-{}-input", id);
@@ -714,7 +469,7 @@ pub fn worker(app: Arc<App>, id: usize) {
     let mut case = FuzzCase {
         start_instant: Instant::now(),
         pid: 0,
-        input: FuzzFile::default(),
+        input: FuzzInput::default(),
         static_file_try_more: false,
         mutations_per_run: app.config.app_config.mutation_per_run,
         rand: Rand::new_random_seed(),
@@ -725,7 +480,7 @@ pub fn worker(app: Arc<App>, id: usize) {
     println!("{}", mapname);
 
     loop {
-        let mutation_count = app.mutations_count.fetch_add(1, Ordering::Relaxed);
+        let mutation_count = app.metrics.mutations_count.fetch_add(1, Ordering::Relaxed);
 
         if let Some(mutation_num) = app.config.app_config.mutation_num {
             if mutation_count >= mutation_num {
@@ -736,7 +491,7 @@ pub fn worker(app: Arc<App>, id: usize) {
         fuzz_loop(&app, &mut case);
 
         if app.config.app_config.crash_exit {
-            if app.crashes_count.load(Ordering::Relaxed) > 0 {
+            if app.metrics.crashes_count.load(Ordering::Relaxed) > 0 {
                 println!("Global crash");
                 break;
             }
@@ -751,54 +506,44 @@ fn sanitizer_init(config: &Config) {
     std::env::set_var("LSAN_OPTIONS", ASAN_COMMON_FLAGS);
 }
 
-pub fn fuzz(config: Config) {
-    //sanitizer_init(&config);
-
-    let fuzz_state = if config.app_config.socket_fuzzer {
-        println!("Entering phase - Feedbaclk drvier mode (SocketFuzzer)");
-        FuzzState::DynamicMain
+/// Compute the starting fuzz mode based on the config
+fn compute_fuzz_mode(config: &Config) -> Mode {
+    let mode = if config.app_config.socket_fuzzer {
+        Mode::DynamicMain
     } else if config.app_config.feedback_method != FeedBackMethod::NONE {
-        println!("Entering phase 1/3: Dry run");
-        FuzzState::DynamicDryRun
+        Mode::DynamicDryRun
     } else {
-        println!("Entering phase: Static");
-        FuzzState::Static
+        Mode::Static
     };
+
+    // Log mode
+    match mode {
+        Mode::DynamicMain => {
+            println!("Entering phase - Feedbaclk drvier mode (SocketFuzzer)");
+        }
+        Mode::DynamicDryRun => {
+            println!("Entering phase 1/3: Dry run");
+        }
+        Mode::Static => {
+            println!("Entering phase: Static");
+        }
+        _ => unreachable!(),
+    }
+
+    mode
+}
+
+/// Start fuzzing
+pub fn fuzz(config: Config) {
+    // Get mode
+    let mode = compute_fuzz_mode(&config);
 
     let mut threads = Vec::new();
     assert!(config.exe_config.cmdline.is_some());
 
-    let mut dicos: Vec<Dico> = Vec::new();
-    for i in 0..1024 {
-        dicos.push(Dico::default());
-    }
-
     let exe_path = std::path::Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
     let exe_data = std::fs::read(exe_path).unwrap();
-    let app = Arc::new(App {
-        config: config,
-        start_datatime: Local::now(),
-        start_instant: Instant::now(),
-        job_active_count: AtomicUsize::new(0),
-        mutations_count: AtomicUsize::new(0),
-        crashes_count: AtomicUsize::new(0),
-        fuzz_state: AtomicUsize::new(fuzz_state as usize),
-        exe_data: exe_data,
-        corpus: Mutex::new(Corpus::new()),
-        tested_file_count: AtomicUsize::new(0),
-        last_cov_update: AtomicUsize::new(0),
-        mutex: Mutex::new(()),
-        switching_feedback: AtomicBool::new(false),
-        terminated_elapsed: AtomicUsize::new(0),
-        fuzz_file_count: AtomicUsize::new(0),
-        max_cov: Mutex::new(FuzzCov::default()),
-        fuzz_file_max_size: Mutex::new(0),
-        new_units_added: AtomicUsize::new(0),
-        current_file: Mutex::new(None),
-        dic_count: AtomicUsize::new(0),
-        dico: Mutex::new(dicos.try_into().unwrap()),
-        feedback_maps: Mutex::new(Vec::new()),
-    });
+    let app = Arc::new(App::new(config, mode));
 
     for i in 0..app.config.app_config.jobs {
         let builder = thread::Builder::new()

@@ -2,8 +2,12 @@
 
 #![warn(missing_docs)]
 
+mod app;
 mod cli;
 mod config;
+mod corpus;
+mod dico;
+mod feedback;
 mod fuzz;
 mod input;
 mod mangle;

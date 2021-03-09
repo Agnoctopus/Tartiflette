@@ -5,8 +5,8 @@ use chrono::format;
 use crate::fuzz::FuzzCase;
 use crate::{
     config::{self, AppConfig, Config},
-    fuzz::App,
 };
+use crate::app::App;
 use std::path::Path;
 
 pub const INPUT_MIN_SIZE: usize = 8 * 1024;
@@ -142,7 +142,7 @@ pub fn input_init(config: &mut Config) -> Result<(), String> {
 }
 
 pub fn get_random_input(app: &App) -> Vec<u8> {
-    if app.fuzz_file_count.load(Ordering::Relaxed) == 0 {}
+    if app.metrics.fuzz_input_count.load(Ordering::Relaxed) == 0 {}
 
     let corpus = app.corpus.lock().unwrap();
     let mut files = match *app.current_file.lock().unwrap() {

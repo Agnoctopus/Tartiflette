@@ -1,13 +1,13 @@
-use core::num;
-use std::{convert::TryInto, env::var, sync, u64, unimplemented};
+//! Mangle subsystem
 
-use crate::{
-    config::Config,
-    fuzz::{App, FuzzCase},
-    input::{get_random_input, INPUT_MAX_SIZE, INPUT_MIN_SIZE},
-    random::Rand,
-};
-use std::sync::atomic::Ordering;
+use crate::app::App;
+
+use crate::config::Config;
+use crate::fuzz::FuzzCase;
+use crate::input;
+use crate::random::Rand;
+
+use std::{convert::TryInto, sync::atomic::Ordering};
 
 const MAGIC_TABLE: &[&[u8]] = &[
     // 1 byte no endianness
@@ -272,7 +272,7 @@ fn mangle_len_left(case: &mut FuzzCase, off: usize) -> usize {
 /// Based on an idea by https://twitter.com/gamozolabs
 ///
 fn mangle_get_len(rand: &mut Rand, max: usize) -> usize {
-    if max > INPUT_MIN_SIZE || max == 0 {
+    if max > input::INPUT_MIN_SIZE || max == 0 {
         panic!();
     }
 
@@ -297,7 +297,10 @@ fn mangle_get_offset(case: &mut FuzzCase) -> usize {
 
 fn mangle_get_offset_inc(case: &mut FuzzCase) -> usize {
     // Offset which can be equal to the file size
-    mangle_get_len(&mut case.rand, INPUT_MAX_SIZE.min(case.input.size + 1)) - 1
+    mangle_get_len(
+        &mut case.rand,
+        input::INPUT_MAX_SIZE.min(case.input.size + 1),
+    ) - 1
 }
 fn mangle_move(case: &mut FuzzCase, off_from: usize, off_to: usize, mut len: usize) {
     if off_from >= case.input.size {
@@ -468,26 +471,28 @@ fn mangle_magic(case: &mut FuzzCase, app: &App) {
 }
 
 fn mangle_static_dict(case: &mut FuzzCase, app: &App) {
-    let dic_count = app.dic_count.load(Ordering::Relaxed);
-    if dic_count == 0 {
+    let dico = app.dico.lock().unwrap();
+
+    if dico.entries.len() == 0 {
         mangle_bytes(case, app);
     }
 
-    let choice = case.rand.random_in(0..dic_count as u64) as usize;
+    let choice = case.rand.random_in(0..dico.entries.len() as u64) as usize;
 
-    let dicos = app.dico.lock().unwrap();
-    let dico = &dicos[choice];
-    mangle_use_value(case, &dico.data[..dico.len], app);
+    let entry = &dico.entries[choice];
+    mangle_use_value(case, &entry.data[..entry.len], app);
 }
 
 fn mangle_feedback_dict(case: &mut FuzzCase, app: &App) -> Option<Vec<u8>> {
-    let maps = app.feedback_maps.lock().unwrap();
-    if maps.len() == 0 {
+    let feedback = app.feedback.lock().unwrap();
+
+    let map = &feedback.cmp_feedback_map;
+    if map.entries.len() == 0 {
         return None;
     }
 
-    let choice = case.rand.random_in(0..maps.len() as u64 - 1) as usize;
-    let map = &maps[choice];
+    let choice = case.rand.random_in(0..map.entries.len() as u64 - 1) as usize;
+    let map = &map.entries[choice];
     if map.len == 0 {
         return None;
     }
@@ -740,7 +745,7 @@ fn mangle_ascii_num_change(case: &mut FuzzCase, app: &App) {
 }
 
 fn mangle_splice(case: &mut FuzzCase, app: &App) {
-    let data = get_random_input(app);
+    let data = input::get_random_input(app);
     if data.len() == 0 {
         mangle_bytes(case, app);
         return;
@@ -831,7 +836,8 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
         change_count = core::cmp::max(change_count, app.config.app_config.mutation_per_run);
     }
 
-    if app.start_instant.elapsed().as_secs() as usize - app.last_cov_update.load(Ordering::Relaxed)
+    if app.metrics.start_instant.elapsed().as_secs() as usize
+        - app.metrics.last_cov_update.load(Ordering::Relaxed)
         > 5
     {
         if case.rand.random_bool() {
