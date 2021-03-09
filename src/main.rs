@@ -3,13 +3,14 @@
 #![warn(missing_docs)]
 
 use kvm_ioctls::Kvm;
-use memory::{PagePermissions, VirtualMemory};
 use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::unistd::Pid;
-use snapshot::Snapshot;
 
 use std::thread;
 use std::time::Duration;
+
+use memory::{PagePermissions, VirtualMemory};
+use snapshot::Snapshot;
 
 use tartiflette::vm::Vm;
 

@@ -189,8 +189,8 @@ impl App {
         self.fuzz_state
             .store(fuzz_state as usize, Ordering::Relaxed);
     }
-    #[inline]
 
+    #[inline]
     pub fn is_terminating(&self) -> bool {
         self.terminated_elapsed.load(Ordering::Relaxed) > 0
     }
