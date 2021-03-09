@@ -441,6 +441,7 @@ fn fuzz_loop(app: &App, case: &mut FuzzCase) {
     }
 }
 
+/// Fuzz worker
 pub fn worker(app: Arc<App>, id: usize) {
     app.metrics.job_active_count.fetch_add(1, Ordering::Relaxed);
     println!("Launched fuzzing threads: no {}", id);
@@ -509,31 +510,32 @@ fn compute_fuzz_mode(config: &Config) -> Mode {
 
 /// Start fuzzing
 pub fn fuzz(config: Config) {
-    // Get mode
-    let mode = compute_fuzz_mode(&config);
-
     let mut threads = Vec::new();
-    assert!(config.exe_config.cmdline.is_some());
 
-    let exe_path = std::path::Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
-    let exe_data = std::fs::read(exe_path).unwrap();
+    // Create the App
+    let mode = compute_fuzz_mode(&config);
     let app = Arc::new(App::new(config, mode));
 
+    // Loop through numbers of jobs
     for i in 0..app.config.app_config.jobs {
+        // Create a thread builder
         let builder = thread::Builder::new()
             .stack_size(1024 * 1024)
             .name(format!("fuzz_worker({})", i));
+
+        // Arc clone the App
         let app = Arc::clone(&app);
 
-        threads.push(
-            builder
-                .spawn(move || {
-                    worker(app, i);
-                })
-                .unwrap(),
-        );
+        // Launch the thread
+        let thread = builder
+            .spawn(move || {
+                worker(app, i);
+            })
+            .unwrap();
+        threads.push(thread);
     }
 
+    // Wait for thread completion
     for thread in threads {
         thread.join().unwrap();
     }
