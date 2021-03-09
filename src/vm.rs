@@ -182,31 +182,14 @@ impl Vm {
         for mapping in snapshot.mappings() {
             let perms = string_perms_to_perms(&mapping.permissions);
 
-            for offset in (0..mapping.size()).step_by(PAGE_SIZE) {
-                memory.mmap(mapping.start + offset as u64, PAGE_SIZE, perms)?;
+            let size = mapping.size().align_power2(PAGE_SIZE);
+            memory.mmap(mapping.start, size, perms)?;
 
-                // Write the data to memory
-                if let Some(data) =
-                    snapshot.read(mapping.physical_offset + offset as u64, PAGE_SIZE)
-                {
-                    // Read was incomplete
-                    if data.len() != PAGE_SIZE {
-                        return Err(VmError::Memory(MemoryError::OutOfMemory));
-                    }
-
-                    memory.write(mapping.start + offset as u64, data.as_slice())?;
+            if let Some(data) = snapshot.read(mapping.physical_offset as u64, size) {
+                if data.len() != size {
+                    return Err(VmError::Memory(MemoryError::OutOfMemory));
                 }
-            }
-            // TODO Why go page to page, why not:
-            if false {
-                let size = mapping.size().align_power2(PAGE_SIZE);
-                memory.mmap(mapping.start, size, perms)?;
-                if let Some(data) = snapshot.read(mapping.physical_offset as u64, size) {
-                    if data.len() != size {
-                        return Err(VmError::Memory(MemoryError::OutOfMemory));
-                    }
-                    memory.write(mapping.start as u64, &data)?;
-                }
+                memory.write(mapping.start as u64, &data)?;
             }
         }
 
