@@ -7,6 +7,7 @@ use super::{MemoryError, Result, PAGE_SIZE};
 use std::cmp::min;
 
 /// Virtual machine memory manager
+#[derive(Debug)]
 pub struct VirtualMemory {
     /// Physical memory of the VM
     pub pmem: PhysicalMemory,

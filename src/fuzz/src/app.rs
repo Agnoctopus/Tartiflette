@@ -6,6 +6,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use chrono::{DateTime, Local};
+use kvm_ioctls::Kvm;
+use snapshot::Snapshot;
+use tartiflette::vm::Vm;
 
 use crate::config::Config;
 use crate::corpus::{Corpus, FuzzCov};
@@ -40,11 +43,11 @@ pub struct App {
     pub corpus: Mutex<Corpus>,
     /// FeedBack
     pub feedback: Mutex<FeedBack>,
+    /// Executable
+    pub exe: Mutex<Exe>,
 
     /// Next filename to be used as fuzz input
     pub current_file: Mutex<Option<String>>,
-    /// Executable binary data
-    pub exe_data: Option<Vec<u8>>,
     /// Szitching mode in transition
     pub switching_feedback: AtomicBool,
     /// Max coverage value
@@ -52,16 +55,12 @@ pub struct App {
     /// Mutation dictionnary
     pub dico: Mutex<Dico>,
 }
-/*
-let app = Arc::new(App {
-    mutex: Mutex::new(()),
-    feedback_maps: Mutex::new(Vec::new()),
-});
-*/
 
 impl App {
     /// Create a new `App` instance
     pub fn new(config: Config, mode: Mode) -> Self {
+        let exe = Exe::new(&config);
+
         Self {
             config: config,
 
@@ -71,9 +70,9 @@ impl App {
             metrics: Metrics::new(),
             corpus: Mutex::new(Corpus::new()),
             feedback: Mutex::new(FeedBack::new()),
+            exe: Mutex::new(exe),
 
             current_file: Mutex::new(None),
-            exe_data: None,
             switching_feedback: AtomicBool::new(false),
             max_cov: Mutex::new(FuzzCov::default()),
             dico: Mutex::new(Dico::new()),
@@ -102,7 +101,8 @@ impl App {
     #[inline]
     pub fn set_terminating_to(&self, elapsed: usize) {
         self.terminated_elapsed
-            .compare_exchange(0, elapsed, Ordering::Relaxed, Ordering::Relaxed);
+            .compare_exchange(0, elapsed, Ordering::Relaxed, Ordering::Relaxed)
+            .unwrap();
     }
 
     /// Set the terminating state to now
@@ -122,6 +122,63 @@ impl App {
     }
 }
 
+/// Application fuzzing executable
+pub struct Exe {
+    // Pure executable
+    /// Executable binary data
+    pub bin_data: Option<Vec<u8>>,
+
+    // Snapshot
+    /// KVM handle
+    pub kvm: Option<Kvm>,
+    /// Root vm
+    pub vm: Option<Vm>,
+    /// Snapshot
+    pub snapshot: Option<Snapshot>,
+}
+
+unsafe impl Send for Exe {}
+
+impl Exe {
+    /// Create a new instance of `Exe`
+    pub fn new(config: &Config) -> Self {
+        let mut exe = Self {
+            bin_data: None,
+
+            kvm: None,
+            vm: None,
+            snapshot: None,
+        };
+
+        if config.exe_config.snapshot.is_some() {
+            // Instantiate KVM
+            let kvm = Kvm::new().expect("Failed to instantiate KVM");
+            assert!(kvm.get_api_version() >= 12);
+
+            let mut snapshot = Snapshot::new(config.exe_config.snapshot.as_ref().unwrap())
+                .expect("Snapshot loading failed");
+            let snapshot_size = snapshot.size();
+            let vm = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+
+            exe.kvm = Some(kvm);
+            exe.snapshot = Some(snapshot);
+            exe.vm = Some(vm);
+        } else {
+            let exe_path = std::path::Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
+            let exe_data = std::fs::read(exe_path).unwrap();
+            exe.bin_data = Some(exe_data);
+        }
+
+        exe
+    }
+}
+
+impl core::fmt::Debug for Exe {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_tuple("Exe").finish()
+    }
+}
+
 /// Application metrics
 #[derive(Debug)]
 pub struct Metrics {
@@ -132,12 +189,17 @@ pub struct Metrics {
 
     /// Number of active jobs
     pub job_active_count: AtomicUsize,
+    /// Number of job finished
+    pub job_finished_count: AtomicUsize,
+
     /// Number of mutations performed
     pub mutations_count: AtomicUsize,
     /// Number of crashs
     pub crashes_count: AtomicUsize,
     /// Number of tested files
     pub tested_file_count: AtomicUsize,
+    /// Number of fuzz cases run
+    pub fuzz_case_count: AtomicUsize,
 
     /// Number of fuzz input
     pub fuzz_input_count: AtomicUsize,
@@ -148,6 +210,9 @@ pub struct Metrics {
     pub last_cov_update: AtomicUsize,
     /// Number of new units added
     pub new_units_added: AtomicUsize,
+
+    /// Max time spent on a fuzz run
+    pub max_fuzz_run_time_ms: Mutex<usize>,
 }
 
 impl Metrics {
@@ -158,15 +223,20 @@ impl Metrics {
             start_instant: Instant::now(),
 
             job_active_count: AtomicUsize::new(0),
+            job_finished_count: AtomicUsize::new(0),
+
             mutations_count: AtomicUsize::new(0),
             crashes_count: AtomicUsize::new(0),
             tested_file_count: AtomicUsize::new(0),
+            fuzz_case_count: AtomicUsize::new(0),
 
             fuzz_input_count: AtomicUsize::new(0),
             fuzz_input_max_size: Mutex::new(0),
 
             last_cov_update: AtomicUsize::new(0),
             new_units_added: AtomicUsize::new(0),
+
+            max_fuzz_run_time_ms: Mutex::new(0),
         }
     }
 }

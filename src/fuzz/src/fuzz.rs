@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
+use tartiflette::vm::Vm;
+
 use crate::app::App;
 use crate::app::Mode;
 use crate::config::Config;
@@ -18,17 +20,54 @@ use crate::mangle;
 use crate::random::Rand;
 
 #[derive(Debug)]
+pub struct FuzzWorker {}
+
+#[derive(Debug)]
 pub struct FuzzCase {
-    pub pid: usize,
+    /// Unique id
+    pub id: usize,
+    /// Start run instant
     pub start_instant: Instant,
+
+    /// Input data
     pub input: FuzzInput,
+
+    /// Proccess id
+    pub pid: Option<usize>,
+    /// VM
+    pub vm: Option<Vm>,
+
     pub static_file_try_more: bool,
     pub mutations_per_run: usize,
-    pub rand: Rand,
     pub tries: usize,
+
+    /// Pseudo-random generator
+    pub rand: Rand,
 }
 
 impl FuzzCase {
+    pub fn new(app: &App) -> Self {
+        let vm = {
+            let exe = app.exe.lock().unwrap();
+            exe.vm.as_ref().unwrap().fork(&exe.kvm.as_ref().unwrap()).unwrap()
+        };
+
+        Self {
+            id: 0,
+            start_instant: Instant::now(),
+
+            pid: None,
+            input: FuzzInput::default(),
+            vm: Some(vm),
+
+            static_file_try_more: false,
+            mutations_per_run: app.config.app_config.mutation_per_run,
+            tries: 0,
+
+            rand: Rand::new_random_seed(),
+        }
+    }
+
     pub fn set_input_size(&mut self, size: usize, config: &Config) {
         if self.input.size == size {
             return;
@@ -41,6 +80,23 @@ impl FuzzCase {
             );
         }
         self.input.size = size;
+    }
+
+    /// Run
+    pub fn run(&mut self, app: &App) -> Result<(), ()> {
+        self.id = app.metrics.fuzz_case_count.fetch_add(1, Ordering::Relaxed);
+
+        println!("Run FuzzCase");
+        {
+            let exe = app.exe.lock().unwrap();
+            self.vm.as_mut().unwrap().reset(exe.vm.as_ref().unwrap()).unwrap();
+        };
+
+        let elasped = self.start_instant.elapsed().as_millis() as usize;
+        let mut max_elasped = app.metrics.max_fuzz_run_time_ms.lock().unwrap();
+        *max_elasped = max_elasped.max(elasped);
+
+        Ok(())
     }
 }
 
@@ -107,11 +163,6 @@ fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
     if false {
         todo!("covdir new");
     }
-}
-
-#[derive(Debug)]
-pub struct FuzzWorker {
-    id: usize,
 }
 
 fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
@@ -392,7 +443,7 @@ fn fuzz_fetch_input(app: &App, case: &mut FuzzCase) -> bool {
 
     if app.get_mode() == Mode::DynamicMain {
         if app.config.exe_config.mutation_cmdline.is_some() {
-            unimplemented!();
+            todo!();
         } else if app.config.exe_config.fb_mutation_cmdline.is_some() {
             if !prepare_dynamic_input(app, case, false) {
                 eprintln!("Failed");
@@ -413,10 +464,6 @@ fn fuzz_fetch_input(app: &App, case: &mut FuzzCase) -> bool {
     return true;
 }
 
-fn subproc_run(app: &App, case: &mut FuzzCase) -> bool {
-    true
-}
-
 fn compute_feedback(app: &App, case: &mut FuzzCase) {}
 
 fn report_save_report(app: &App, case: &mut FuzzCase) {}
@@ -429,16 +476,17 @@ fn fuzz_loop(app: &App, case: &mut FuzzCase) {
             app.set_terminating();
             return;
         }
-        if !subproc_run(app, case) {
-            eprintln!("Could not prepare input for fuzzing");
-        }
-
-        if app.config.app_config.feedback_method != FeedBackMethod::NONE {
-            compute_feedback(app, case);
-        }
         eprintln!("Could not prepare input for fuzzing");
-        report_save_report(app, case);
     }
+    if case.run(&app).is_err() {
+        eprintln!("Couldn't run fuzzed command");
+    }
+
+    if app.config.app_config.feedback_method != FeedBackMethod::NONE {
+        compute_feedback(app, case);
+    }
+
+    report_save_report(app, case);
 }
 
 /// Fuzz worker
@@ -448,15 +496,7 @@ pub fn worker(app: Arc<App>, id: usize) {
 
     let mapname = format!("tf-{}-input", id);
     println!("{}", mapname);
-    let mut case = FuzzCase {
-        start_instant: Instant::now(),
-        pid: 0,
-        input: FuzzInput::default(),
-        static_file_try_more: false,
-        mutations_per_run: app.config.app_config.mutation_per_run,
-        rand: Rand::new_random_seed(),
-        tries: 0,
-    };
+    let mut case = FuzzCase::new(&app);
 
     let mapname = format!("tf-{}-perthreadmap", id);
     println!("{}", mapname);
@@ -471,14 +511,23 @@ pub fn worker(app: Arc<App>, id: usize) {
         }
 
         fuzz_loop(&app, &mut case);
+        if app.is_terminating() {
+            break;
+        }
 
         if app.config.app_config.crash_exit {
             if app.metrics.crashes_count.load(Ordering::Relaxed) > 0 {
                 println!("Global crash");
+                app.set_terminating();
                 break;
             }
         }
     }
+
+    println!("Terminated fuzzing threads: no {}", id);
+    app.metrics
+        .job_finished_count
+        .fetch_add(1, Ordering::Relaxed);
 }
 
 /// Compute the starting fuzz mode based on the config

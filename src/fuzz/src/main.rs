@@ -63,9 +63,6 @@ fn launch_program(mut config: Config) {
     );
     check_sig(&mut config);
 
-    let exe_path = std::path::Path::new(&config.exe_config.cmdline.as_ref().unwrap()[0]);
-    let _exe_data = std::fs::read(exe_path).unwrap();
-
     todo!();
 }
 

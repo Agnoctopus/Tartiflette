@@ -8,6 +8,7 @@ use bits::Alignement;
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 
 /// Virtual machine physical memory
+#[derive(Debug)]
 pub struct PhysicalMemory {
     /// Point to the start of the physical memory
     raw_data: *mut u8,

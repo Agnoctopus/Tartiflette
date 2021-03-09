@@ -147,7 +147,7 @@ pub fn get_random_input(app: &App) -> Vec<u8> {
         None => corpus.iter(),
     };
 
-    let mut file = files.next().unwrap();
+    let file = files.next().unwrap();
     *app.current_file.lock().unwrap() = files.next().map(|file| file.path.clone());
 
     return file.data[..file.size].to_vec();
