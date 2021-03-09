@@ -1,10 +1,10 @@
 //! Command line interface
 
-use crate::config::Config;
-
 use std::convert::TryFrom;
 
-use clap::{self, App, Arg};
+use clap::{App, Arg};
+
+use crate::config::Config;
 
 /// CLI manager
 pub struct CLI;

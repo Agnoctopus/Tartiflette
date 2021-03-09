@@ -12,6 +12,7 @@ mod fuzz;
 mod input;
 mod mangle;
 mod random;
+mod sanitize;
 
 extern crate bits;
 extern crate tartiflette;

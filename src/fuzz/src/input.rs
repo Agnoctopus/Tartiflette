@@ -1,13 +1,10 @@
-use std::{char::ParseCharError, path::PathBuf, sync::atomic::Ordering};
+//! Input subsystem
 
-use chrono::format;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
-use crate::fuzz::FuzzCase;
-use crate::{
-    config::{self, AppConfig, Config},
-};
 use crate::app::App;
-use std::path::Path;
+use crate::config::Config;
 
 pub const INPUT_MIN_SIZE: usize = 8 * 1024;
 pub const INPUT_MAX_SIZE: usize = 1024 * 1024;

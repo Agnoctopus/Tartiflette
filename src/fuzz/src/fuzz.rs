@@ -1,40 +1,21 @@
-//! Fuzz
+//! Fuzz system
 
-use crate::corpus::{Corpus, FuzzCov};
-use crate::random::Rand;
-use crate::{app::App, corpus::FuzzInput};
-use crate::{config::Config, input::input_get_entries};
-use crate::{input::INPUT_MIN_SIZE, mangle};
-use core::{num, panic};
-use mangle::mangle_content;
-use md5;
-use std::{
-    cmp,
-    collections::{BTreeMap, BTreeSet},
-    convert::TryInto,
-    hint::spin_loop,
-    path::PathBuf,
-    sync::atomic::AtomicBool,
-    thread,
-};
-use std::{intrinsics::transmute, sync::Arc};
-use std::{io::Read, sync::Mutex};
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Instant,
-};
+use std::cmp;
+use std::hint;
+use std::io::Read;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Instant;
 
+use crate::app::App;
 use crate::app::Mode;
-use crate::dico::Dico;
+use crate::config::Config;
+use crate::corpus::{FuzzCov, FuzzInput};
 use crate::feedback::FeedBackMethod;
-
-use bits::BitField;
-use chrono::{DateTime, Local};
-use thread::sleep;
-
-const ASAN_COMMON_FLAGS: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=0:handle_segv=2:handle_sigbus=2:handle_abort=2:handle_sigill=2:handle_sigfpe=2:abort_on_error=1:log_path=/tmp/here";
-const MASAN_COMMON_FLAGS: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=0:handle_segv=2:handle_sigbus=2:handle_abort=2:handle_sigill=2:handle_sigfpe=2:abort_on_error=1:wrap_signals=0:print_stats=1:log_path=/tmp/here";
-const kSAN_REGULAR: &str = "symbolize=1:detect_leaks=0:disable_coredump=0:detect_odr_violation=0:allocator_may_return_null=1:allow_user_segv_handler=1:handle_segv=0:handle_sigbus=0:handle_abort=0:handle_sigill=0:handle_sigfpe=0:abort_on_error=1";
+use crate::input;
+use crate::mangle;
+use crate::random::Rand;
 
 #[derive(Debug)]
 pub struct FuzzCase {
@@ -155,8 +136,8 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
             return;
         }
 
-        sleep(std::time::Duration::from_millis(10));
-        spin_loop();
+        thread::sleep(std::time::Duration::from_millis(10));
+        hint::spin_loop();
     }
     app.switching_feedback.store(false, Ordering::Relaxed);
 
@@ -180,11 +161,11 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
     case.input.path = "[DYNAMIC]".to_string();
 
     if app.config.io_config.max_file_size == 0
-        && app.config.app_config.max_input_size > INPUT_MIN_SIZE
+        && app.config.app_config.max_input_size > input::INPUT_MIN_SIZE
     {
         let mut new_size = cmp::max(
             *app.metrics.fuzz_input_max_size.lock().unwrap(),
-            INPUT_MIN_SIZE,
+            input::INPUT_MIN_SIZE,
         );
         new_size = cmp::min(new_size, app.config.app_config.max_input_size);
         println!(
@@ -231,7 +212,7 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
     let mut ent = None;
 
     if input_should_read_new_file(&app, case) {
-        let entries = match input_get_entries(&app.config) {
+        let entries = match input::input_get_entries(&app.config) {
             Ok(entries) => entries,
             Err(_) => return false,
         };
@@ -388,7 +369,7 @@ fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
     case.input.data = file.data.clone();
 
     if mangle {
-        mangle_content(case, speed_factor, app)
+        mangle::mangle_content(case, speed_factor, app)
     }
 
     true
@@ -497,13 +478,6 @@ pub fn worker(app: Arc<App>, id: usize) {
             }
         }
     }
-}
-
-fn sanitizer_init(config: &Config) {
-    std::env::set_var("ASAN_OPTIONS", ASAN_COMMON_FLAGS);
-    std::env::set_var("UBSAN_OPTIONS", ASAN_COMMON_FLAGS);
-    std::env::set_var("MSAN_OPTIONS", MASAN_COMMON_FLAGS);
-    std::env::set_var("LSAN_OPTIONS", ASAN_COMMON_FLAGS);
 }
 
 /// Compute the starting fuzz mode based on the config

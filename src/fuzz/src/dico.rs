@@ -13,7 +13,7 @@ pub struct DicoEntry {
 #[derive(Debug)]
 pub struct Dico {
     /// Entries
-    pub entries: Vec<DicoEntry>
+    pub entries: Vec<DicoEntry>,
 }
 
 impl Dico {
@@ -21,7 +21,7 @@ impl Dico {
     #[inline]
     pub fn new() -> Self {
         Self {
-            entries: Vec::new()
+            entries: Vec::new(),
         }
     }
 

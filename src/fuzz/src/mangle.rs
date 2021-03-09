@@ -1,13 +1,13 @@
 //! Mangle subsystem
 
-use crate::app::App;
+use std::convert::TryInto;
+use std::sync::atomic::Ordering;
 
+use crate::app::App;
 use crate::config::Config;
 use crate::fuzz::FuzzCase;
 use crate::input;
 use crate::random::Rand;
-
-use std::{convert::TryInto, sync::atomic::Ordering};
 
 const MAGIC_TABLE: &[&[u8]] = &[
     // 1 byte no endianness

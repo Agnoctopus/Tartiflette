@@ -1,11 +1,12 @@
 //! Configuration
 
-use std::{convert::TryFrom, fs, path::Path};
+use std::convert::TryFrom;
+use std::fs;
+use std::path::Path;
 
 use clap::ArgMatches;
 
 use crate::feedback::FeedBackMethod;
-use crate::fuzz;
 
 /// Persistent-binary signature - if found within file, it means it's a persistent mode binary
 pub const PERSISTENT_SIG: &[u8] = b"\x01_LIBHFUZZ_PERSISTENT_BINARY_SIGNATURE_\x02\xFF";

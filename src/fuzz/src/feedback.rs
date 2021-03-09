@@ -53,14 +53,14 @@ pub struct CmpFeedBacKEntry {
 #[derive(Debug)]
 pub struct CmpFeedBack {
     /// Entries
-    pub entries: Vec<CmpFeedBacKEntry>
+    pub entries: Vec<CmpFeedBacKEntry>,
 }
 
 impl CmpFeedBack {
     /// Create a new `CmpFeedBack` instance
     pub fn new() -> Self {
         Self {
-            entries: Vec::new()
+            entries: Vec::new(),
         }
     }
 }
