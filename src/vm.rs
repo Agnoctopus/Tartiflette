@@ -1,6 +1,6 @@
 //! Virtual Machine system
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use kvm_bindings::{
     kvm_guest_debug, kvm_regs, kvm_segment, kvm_sregs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP,
@@ -36,6 +36,8 @@ pub enum VmExit {
     Unhandled(u64),
     /// Vm was interrupted by the host (timeout)
     Interrupted,
+    /// VM Exited normally
+    Exit,
 }
 
 impl From<kvm_ioctls::Error> for VmError {
@@ -184,6 +186,18 @@ impl Idt64EntryBuilder {
     }
 }
 
+/// Represents the actual purpose of a breakpoint.
+#[derive(Copy, Clone, Debug)]
+pub enum SuspensionPoint {
+    /// Coverage suspension point. Contains the original byte overwritten by the breakpoint.
+    Coverage(u8),
+    /// Exit suspension point. Signifies that the execution has stopped without errors.
+    Exit,
+    /// Hook suspension point. Signifies that a handler should be executed before restoring execution.
+    /// Contains the original byte overwritten by the breakpoint.
+    Hook(u8),
+}
+
 /// Temporary implementation
 pub struct Vm {
     /// kvm vm file descriptor
@@ -199,7 +213,7 @@ pub struct Vm {
     /// Coverage collected during the last run
     coverage: Vec<u64>,
     /// Breakpoints with the associated original bytes
-    coverage_points: BTreeMap<u64, u8>,
+    suspension_points: BTreeMap<u64, SuspensionPoint>,
 }
 
 impl Vm {
@@ -241,7 +255,6 @@ impl Vm {
 
         const SHELLCODE: &[u8] = &[
             0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, // mov rax, 0x31337
-            0x0f, 0x01, 0xc1, // vmcall
             0xcc,
         ];
         self.memory.write(HANDLERS_ADDR, SHELLCODE)?;
@@ -376,7 +389,7 @@ impl Vm {
             regs: Default::default(),
             sregs: sregs,
             coverage: Vec::new(),
-            coverage_points: BTreeMap::new(),
+            suspension_points: BTreeMap::new(),
         })
     }
 
@@ -469,9 +482,8 @@ impl Vm {
 
     /// Installs a coverage point (breakpoint). Returns true if the breakpoint was
     /// inserted, false if it already existed.
-    #[inline]
     pub fn add_coverage_point(&mut self, addr: u64) -> Result<bool> {
-        if self.coverage_points.contains_key(&addr) {
+        if self.suspension_points.contains_key(&addr) {
             return Ok(false);
         }
 
@@ -481,7 +493,21 @@ impl Vm {
 
         // Write the breakpoint
         self.memory.write(addr, &mut [0xcc])?;
-        self.coverage_points.insert(addr, orig_bytes[0]);
+        self.suspension_points
+            .insert(addr, SuspensionPoint::Coverage(orig_bytes[0]));
+
+        Ok(true)
+    }
+
+    /// Installs an Exit suspension point.
+    /// Returns true if the breakpoint was inserted, false if it already existed.
+    pub fn add_exit_point(&mut self, addr: u64) -> Result<bool> {
+        if self.suspension_points.contains_key(&addr) {
+            return Ok(false);
+        }
+
+        self.memory.write(addr, &mut [0xcc])?;
+        self.suspension_points.insert(addr, SuspensionPoint::Exit);
 
         Ok(true)
     }
@@ -539,9 +565,15 @@ impl Vm {
 
             match vmexit {
                 VcpuExit::Debug => {
-                    if let Some(&orig_byte) = self.coverage_points.get(&regs.rip) {
-                        self.memory.write(regs.rip, &[orig_byte])?;
-                        self.coverage.push(regs.rip);
+                    if let Some(&point) = self.suspension_points.get(&regs.rip) {
+                        match point {
+                            SuspensionPoint::Coverage(orig_byte) => {
+                                self.memory.write(regs.rip, &[orig_byte])?;
+                                self.coverage.push(regs.rip);
+                            }
+                            SuspensionPoint::Exit => break VmExit::Exit,
+                            _ => break VmExit::Breakpoint(regs.rip),
+                        }
                     } else {
                         break VmExit::Breakpoint(regs.rip);
                     }
