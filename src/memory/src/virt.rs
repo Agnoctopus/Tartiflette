@@ -88,11 +88,13 @@ impl VirtualMemory {
     }
 
     /// Returns whether a given `VirtAddr` is mapped into the address space
+    #[inline]
     pub fn is_mapped(&self, address: VirtAddr) -> bool {
         self.get_page_pa(address).is_some()
     }
 
     /// Returns the physical address of a page if it exists
+    #[inline]
     pub fn pa(&self, addr: u64) -> Option<u64> {
         self.get_page_pa(VirtAddr::new(addr)).map(|x| x as u64)
     }

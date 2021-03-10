@@ -14,7 +14,7 @@ use snapshot::Snapshot;
 
 use tartiflette::vm::Vm;
 
-const ASM_64_SHELLCODE: &[u8] = &[0x50, 0x90, 0xcd, 0x06]; // int 6
+const ASM_64_SHELLCODE: &[u8] = &[0xcd, 0x06]; // int 6
 
 extern "C" fn vm_tock(_: i32) {
     // No-op
