@@ -38,6 +38,8 @@ pub enum VmExit {
     Interrupted,
     /// VM Exited normally
     Exit,
+    /// CPU Exception
+    Exception(u8),
 }
 
 impl From<kvm_ioctls::Error> for VmError {
@@ -253,21 +255,14 @@ impl Vm {
             PagePermissions::READ | PagePermissions::EXECUTE,
         )?;
 
-        const SHELLCODE: &[u8] = &[
-            0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, // mov rax, 0x31337
-            0xcc,
-        ];
-        self.memory.write(HANDLERS_ADDR, SHELLCODE)?;
-
         // Debug: Write a specific error code into rax for each exception before vmexit
         for i in 0..32 {
+            let handler_code: &[u8] = &[
+                0x6a, i as u8, // push <exception index>
+                0xf4,    // hlt -> our hypercall
+            ];
             let sc_addr = HANDLERS_ADDR + (i * 32);
-            let exc_index: &[u8] = &[i as u8];
-
-            println!("Handler {} at address: 0x{:x}", i, sc_addr);
-
-            self.memory.write(sc_addr, SHELLCODE)?;
-            self.memory.write(sc_addr + 3, exc_index)?;
+            self.memory.write(sc_addr, handler_code)?;
         }
 
         // IDT Setup
@@ -579,7 +574,18 @@ impl Vm {
                     }
                 }
                 // -1 as hlt takes the ip after its instruction
-                VcpuExit::Hlt => break VmExit::Hlt(regs.rip - 1),
+                VcpuExit::Hlt => {
+                    let mut output: [u8; 16] = [0; 16];
+                    self.memory.read(regs.rsp, output.as_mut())?;
+
+                    for e in output.iter() {
+                        print!("{:02x} ", e);
+                    }
+
+                    println!("");
+
+                    break VmExit::Hlt(regs.rip - 1);
+                }
                 _ => break VmExit::Unhandled(regs.rip),
             }
         };

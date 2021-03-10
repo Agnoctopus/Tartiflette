@@ -14,7 +14,10 @@ use snapshot::Snapshot;
 
 use tartiflette::vm::Vm;
 
-const ASM_64_SHELLCODE: &[u8] = &[0xcd, 0x06]; // int 6
+const ASM_64_SHELLCODE: &[u8] = &[
+    0x48, 0x31, 0xc0, // xor rax, rax
+    0x66, 0xc7, 0x00, 0x37, 0x13, // mov word [rax], 0x1337
+];
 
 extern "C" fn vm_tock(_: i32) {
     // No-op
@@ -97,6 +100,9 @@ fn run() {
     // Run the vm
     let result = vm.run().expect("Run failed");
     println!("Exit status: {:x?}", result);
+    let regs = vm.get_registers().expect("could not get registers");
+
+    println!("Regs: {:#X?}", regs);
 }
 
 /// Main function
