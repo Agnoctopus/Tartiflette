@@ -205,6 +205,92 @@ pub struct Vm {
 impl Vm {
     /// Create a new `Vm` instance
     pub fn new(kvm: &Kvm, memory: VirtualMemory) -> Result<Vm> {
+        // Barebones setup of the vm state
+        let mut vm = Vm::barebones_setup(kvm, memory)?;
+
+        // Finally, we setup the idt, tss and exception handlers
+        vm.setup_exception_handling()?;
+
+        Ok(vm)
+    }
+
+    fn setup_exception_handling(&mut self) -> Result<()> {
+        // TODO: Change this to an option or something
+        const IDT_ADDRESS: u64 = 0xffffffffffa00000;
+        const HANDLERS_ADDR: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
+        const GDT_ADDRESS: u64 = HANDLERS_ADDR + PAGE_SIZE as u64;
+
+        self.memory.mmap(
+            GDT_ADDRESS,
+            PAGE_SIZE,
+            PagePermissions::READ | PagePermissions::WRITE,
+        )?;
+        let pa = self.memory.pa(GDT_ADDRESS).unwrap() as usize;
+        self.memory.pmem.write_val(pa, 0u64).unwrap();
+        self.memory
+            .pmem
+            .write_val(pa + 8, 0x00209a0000000000u64)
+            .unwrap();
+
+        // Handlers setup
+        self.memory.mmap(
+            HANDLERS_ADDR,
+            PAGE_SIZE,
+            PagePermissions::READ | PagePermissions::EXECUTE,
+        )?;
+
+        const SHELLCODE: &[u8] = &[
+            0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, // mov rax, 0x31337
+            0x0f, 0x01, 0xc1, // vmcall
+            0xcc,
+        ];
+        self.memory.write(HANDLERS_ADDR, SHELLCODE)?;
+
+        // Debug: Write a specific error code into rax for each exception before vmexit
+        for i in 0..32 {
+            let sc_addr = HANDLERS_ADDR + (i * 32);
+            let exc_index: &[u8] = &[i as u8];
+
+            println!("Handler {} at address: 0x{:x}", i, sc_addr);
+
+            self.memory.write(sc_addr, SHELLCODE)?;
+            self.memory.write(sc_addr + 3, exc_index)?;
+        }
+
+        // IDT Setup
+        self.memory
+            .mmap(IDT_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
+
+        let mut entries: [Idt64Entry; 32] = [Idt64Entry::new(); 32];
+        let entries_size = entries.len() * std::mem::size_of::<Idt64Entry>();
+        assert!(core::mem::size_of::<Idt64Entry>() == 16);
+        assert!(core::mem::size_of::<Idt64Entry>() * 32 == entries_size);
+
+        // Redirect everything to our vmcall as a test
+        for i in 0..32 {
+            entries[i] = Idt64EntryBuilder::new()
+                .base(HANDLERS_ADDR + (i * 32) as u64)
+                .dpl(Dpl::Ring0)
+                .segment_selector(self.sregs.cs.selector)
+                .gate_type(Idt64EntryType::Trap)
+                .collect();
+        }
+
+        self.sregs.idt.base = IDT_ADDRESS;
+        self.sregs.idt.limit = (entries_size - 1) as u16;
+        self.sregs.gdt.base = GDT_ADDRESS;
+        self.sregs.gdt.limit = 0xFF;
+
+        // Write the handlers to memory
+        let entries_data: &[u8] =
+            unsafe { std::slice::from_raw_parts(entries.as_ptr() as *const u8, entries_size) };
+
+        self.memory.write(IDT_ADDRESS, entries_data)?;
+
+        Ok(())
+    }
+
+    fn barebones_setup(kvm: &Kvm, memory: VirtualMemory) -> Result<Vm> {
         // Create the vm file descriptor
         let vm_fd = kvm.create_vm()?;
         let vm_vcpu_fd = vm_fd.create_vcpu(0)?;
@@ -283,7 +369,7 @@ impl Vm {
 
         vm_vcpu_fd.set_guest_debug(&dregs)?;
 
-        let mut vm = Vm {
+        Ok(Vm {
             vm: vm_fd,
             cpu: vm_vcpu_fd,
             memory: memory,
@@ -291,77 +377,7 @@ impl Vm {
             sregs: sregs,
             coverage: Vec::new(),
             coverage_points: BTreeMap::new(),
-        };
-
-        // Finally, we setup the idt, tss and exception handlers
-        vm.setup_exception_handling()?;
-
-        Ok(vm)
-    }
-
-    fn setup_exception_handling(&mut self) -> Result<()> {
-        // TODO: Change this to an option or something
-        const IDT_ADDRESS: u64 = 0x1fff_ffaa_0000;
-        const HANDLERS_ADDR: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
-        const GDT_ADDRESS: u64 = HANDLERS_ADDR + PAGE_SIZE as u64;
-
-        self.memory.mmap(
-            GDT_ADDRESS,
-            PAGE_SIZE,
-            PagePermissions::READ | PagePermissions::WRITE,
-        )?;
-        let pa = self.memory.pa(GDT_ADDRESS).unwrap() as usize;
-        self.memory.pmem.write_val(pa, 0u64).unwrap();
-        self.memory.pmem.write_val(pa + 8, 0x00209a0000000000u64).unwrap();
-
-
-        // Handlers setup
-        self.memory.mmap(
-            HANDLERS_ADDR,
-            PAGE_SIZE,
-            PagePermissions::READ | PagePermissions::EXECUTE,
-        )?;
-
-        const SHELLCODE: &[u8] = &[
-            0x48, 0xc7, 0xc0, 0x37, 0x13, 0x03, 0x00, // mov rax, 0x31337
-            0x0f, 0x01, 0xc1, // vmcall
-        ];
-        self.memory.write(HANDLERS_ADDR, SHELLCODE)?;
-
-        // IDT Setup
-        self.memory.mmap(
-            IDT_ADDRESS,
-            PAGE_SIZE,
-            PagePermissions::READ | PagePermissions::WRITE,
-        )?;
-
-        let mut entries: [Idt64Entry; 32] = [Idt64Entry::new(); 32];
-        let entries_size = entries.len() * std::mem::size_of::<Idt64Entry>();
-        assert!(core::mem::size_of::<Idt64Entry>() == 16);
-        assert!(core::mem::size_of::<Idt64Entry>() * 32 == entries_size);
-
-        // Redirect everything to our vmcall as a test
-        for i in 0..32 {
-            entries[i] = Idt64EntryBuilder::new()
-                .base(HANDLERS_ADDR)
-                .dpl(Dpl::Ring0)
-                .segment_selector(self.sregs.cs.selector)
-                .gate_type(Idt64EntryType::Trap)
-                .collect();
-        }
-
-        self.sregs.idt.base = IDT_ADDRESS;
-        self.sregs.idt.limit = (entries_size - 1) as u16;
-        self.sregs.gdt.base = GDT_ADDRESS;
-        self.sregs.gdt.limit = 0xFF;
-
-        // Write the handlers to memory
-        let entries_data: &[u8] =
-            unsafe { std::slice::from_raw_parts(entries.as_ptr() as *const u8, entries_size) };
-
-        self.memory.write(IDT_ADDRESS, entries_data)?;
-
-        Ok(())
+        })
     }
 
     /// Creates a Virtual machine from a given snapshot
@@ -539,13 +555,14 @@ impl Vm {
         Ok(result)
     }
 
-    /// Creates a copy of the current Vm state
+    /// Creates a copy of the current Vm state. Does not copy the coverage points.
     pub fn fork(&self, kvm: &Kvm) -> Result<Self> {
         // Copy the initial memory state
         let memory = self.memory.clone()?;
 
-        // Create new vm instance
-        let mut vm = Vm::new(kvm, memory)?;
+        // Create new vm instance. We do a barebones setup as all of the exception
+        // handling code is already in the forker's memory.
+        let mut vm = Vm::barebones_setup(kvm, memory)?;
 
         // Copy the registers state
         vm.regs = self.regs;
