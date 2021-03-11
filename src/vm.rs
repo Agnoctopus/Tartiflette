@@ -625,7 +625,6 @@ mod tests {
         // Maps a simple `add rdx, rax; hlt`
         let shellcode: &[u8] = &[
             0x48, 0x01, 0xc2, // add rdx, rax
-            0xf4, // hlt
         ];
 
         memory.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)?;
@@ -643,10 +642,13 @@ mod tests {
         vm.set_initial_regs(regs);
         vm.commit_registers()?;
 
+        // Add exit point
+        vm.add_exit_point(0x1337003)?;
+
         // Runs the vm until completion (hlt)
         let vmexit = vm.run()?;
 
-        assert_eq!(vmexit, VmExit::Hlt(0x1337003));
+        assert_eq!(vmexit, VmExit::Exit);
         Ok(())
     }
 
@@ -660,7 +662,6 @@ mod tests {
             0x48, 0x01, 0xc2, // add rdx, rax
             0x48, 0x01, 0xd8, // add rax, rbx
             0x31, 0xc0, // xor eax, eax
-            0xf4, // hlt
         ];
 
         memory.mmap(0x1337000, 0x1000, PagePermissions::EXECUTE)?;
@@ -684,17 +685,20 @@ mod tests {
             vm.add_coverage_point(bkpt)?;
         }
 
+        // Add exit point
+        vm.add_exit_point(0x1337008)?;
+
         // Runs the vm until completion (hlt)
         let vmexit = vm.run()?;
         let coverage = vm.get_coverage();
 
-        assert_eq!(vmexit, VmExit::Hlt(0x1337008), "Wrong exit address");
+        assert_eq!(vmexit, VmExit::Exit, "Wrong exit address");
         assert_eq!(breakpoints, *coverage, "Coverage does not match");
 
         // Check that a reset does not reset the breakpoints in memory
         vm.reset(&original_vm)?;
 
-        let mut shellcode_read_back: [u8; 9] = [0; 9];
+        let mut shellcode_read_back: [u8; 8] = [0; 8];
         vm.memory.read(0x1337000, &mut shellcode_read_back)?;
 
         assert_eq!(shellcode, shellcode_read_back);
