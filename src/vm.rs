@@ -1,6 +1,6 @@
 //! Virtual Machine system
-
-use std::collections::{BTreeMap, HashSet};
+use crate::x64::{Dpl, IdtEntry, IdtEntryBuilder, IdtEntryType};
+use std::collections::BTreeMap;
 
 use kvm_bindings::{
     kvm_guest_debug, kvm_regs, kvm_segment, kvm_sregs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP,
@@ -67,125 +67,6 @@ fn string_perms_to_perms(perms: &str) -> PagePermissions {
     }
 
     perm_flags
-}
-
-/// Temporary implementation
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug)]
-struct Idt64Entry {
-    /// First part of the handler base address
-    base_00_15: u16,
-    /// Segment selector to use
-    segment_selector: u16,
-    /// Entry flags (present, DPL, type, IST)
-    flags: u16,
-    /// Second part of the handle base address
-    base_16_31: u16,
-    /// Last part of the handle base address
-    base_32_64: u32,
-    /// Reserved
-    reserved: u32,
-}
-
-impl Idt64Entry {
-    /// Create a new `Idt64Entry` instance
-    pub fn new() -> Self {
-        Idt64Entry {
-            base_00_15: 0,
-            base_16_31: 0,
-            base_32_64: 0,
-            segment_selector: 0,
-            flags: 0,
-            reserved: 0,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-#[repr(u8)]
-enum Dpl {
-    Ring0 = 0,
-    Ring3 = 3,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Idt64EntryType {
-    Interrupt = 0b1110,
-    Trap = 0b1111,
-}
-
-struct Idt64EntryBuilder {
-    base: u64,
-    segment_selector: u16,
-    ist: u8,
-    dpl: Dpl,
-    gate_type: Idt64EntryType,
-}
-
-impl Idt64EntryBuilder {
-    pub fn new() -> Self {
-        Idt64EntryBuilder {
-            base: 0,
-            segment_selector: 0,
-            ist: 0,
-            dpl: Dpl::Ring0,
-            gate_type: Idt64EntryType::Interrupt,
-        }
-    }
-
-    #[inline]
-    pub fn base(&mut self, base: u64) -> &mut Self {
-        self.base = base;
-        self
-    }
-
-    #[inline]
-    pub fn ist(&mut self, ist: u8) -> &mut Self {
-        assert!(ist <= 7, "IST mut be in the range 0-7, got {}", ist);
-        self.ist = ist;
-        self
-    }
-
-    #[inline]
-    pub fn dpl(&mut self, dpl: Dpl) -> &mut Self {
-        assert!(
-            dpl as u8 <= 3,
-            "DPL must be in range 0-3, got {}",
-            dpl as u8
-        );
-        self.dpl = dpl;
-        self
-    }
-
-    #[inline]
-    pub fn segment_selector(&mut self, segment: u16) -> &mut Self {
-        self.segment_selector = segment;
-        self
-    }
-
-    #[inline]
-    pub fn gate_type(&mut self, gate_type: Idt64EntryType) -> &mut Self {
-        self.gate_type = gate_type;
-        self
-    }
-
-    #[inline]
-    pub fn collect(&self) -> Idt64Entry {
-        let mut flags: u16 = 1 << 15; // Present
-        flags |= (self.dpl as u16) << 13; // Dpl
-        flags |= (self.gate_type as u16) << 8; // Gate Type
-        flags |= self.ist as u16;
-
-        Idt64Entry {
-            base_00_15: self.base as u16,
-            base_16_31: (self.base >> 16) as u16,
-            base_32_64: (self.base >> 32) as u32,
-
-            segment_selector: self.segment_selector,
-            flags: flags,
-            reserved: 0,
-        }
-    }
 }
 
 /// Represents the actual purpose of a breakpoint.
@@ -269,18 +150,18 @@ impl Vm {
         self.memory
             .mmap(IDT_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
 
-        let mut entries: [Idt64Entry; 32] = [Idt64Entry::new(); 32];
-        let entries_size = entries.len() * std::mem::size_of::<Idt64Entry>();
-        assert!(core::mem::size_of::<Idt64Entry>() == 16);
-        assert!(core::mem::size_of::<Idt64Entry>() * 32 == entries_size);
+        let mut entries: [IdtEntry; 32] = [IdtEntry::new(); 32];
+        let entries_size = entries.len() * std::mem::size_of::<IdtEntry>();
+        assert!(core::mem::size_of::<IdtEntry>() == 16);
+        assert!(core::mem::size_of::<IdtEntry>() * 32 == entries_size);
 
         // Redirect everything to our vmcall as a test
         for i in 0..32 {
-            entries[i] = Idt64EntryBuilder::new()
+            entries[i] = IdtEntryBuilder::new()
                 .base(HANDLERS_ADDR + (i * 32) as u64)
                 .dpl(Dpl::Ring0)
                 .segment_selector(self.sregs.cs.selector)
-                .gate_type(Idt64EntryType::Trap)
+                .gate_type(IdtEntryType::Trap)
                 .collect();
         }
 
