@@ -169,6 +169,26 @@ impl VirtualMemory {
         Ok(())
     }
 
+    /// Writes a passed value to memory
+    pub fn write_val<T>(&mut self, address: u64, val: T) -> Result<()> {
+        let slice = unsafe {
+            std::slice::from_raw_parts(&val as *const T as *const u8, core::mem::size_of::<T>())
+        };
+
+        self.write(address, slice)
+    }
+
+    /// Reads a given value from memory
+    pub fn read_val<T>(&self, address: u64) -> Result<T> {
+        // TODO: Find a better way of doing this
+        let mut bytes: Vec<u8> = vec![0; core::mem::size_of::<T>()];
+        self.read(address, bytes.as_mut_slice())?;
+
+        let result = bytes.as_ptr() as *const T;
+
+        Ok(unsafe { result.read() })
+    }
+
     /// Returns the page directory virtual address
     #[inline]
     pub fn page_directory(&self) -> usize {

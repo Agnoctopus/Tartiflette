@@ -117,17 +117,16 @@ impl Vm {
         const HANDLERS_ADDR: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
         const GDT_ADDRESS: u64 = HANDLERS_ADDR + PAGE_SIZE as u64;
 
+        // GDT setup
         self.memory.mmap(
             GDT_ADDRESS,
             PAGE_SIZE,
             PagePermissions::READ | PagePermissions::WRITE,
         )?;
-        let pa = self.memory.pa(GDT_ADDRESS).unwrap() as usize;
-        self.memory.pmem.write_val(pa, 0u64).unwrap();
+
+        self.memory.write_val(GDT_ADDRESS, 0u64)?;
         self.memory
-            .pmem
-            .write_val(pa + 8, 0x00209a0000000000u64)
-            .unwrap();
+            .write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?;
 
         // Handlers setup
         self.memory.mmap(
@@ -152,8 +151,6 @@ impl Vm {
 
         let mut entries: [IdtEntry; 32] = [IdtEntry::new(); 32];
         let entries_size = entries.len() * std::mem::size_of::<IdtEntry>();
-        assert!(core::mem::size_of::<IdtEntry>() == 16);
-        assert!(core::mem::size_of::<IdtEntry>() * 32 == entries_size);
 
         // Redirect everything to our vmcall as a test
         for i in 0..32 {
@@ -170,11 +167,7 @@ impl Vm {
         self.sregs.gdt.base = GDT_ADDRESS;
         self.sregs.gdt.limit = 0xFF;
 
-        // Write the handlers to memory
-        let entries_data: &[u8] =
-            unsafe { std::slice::from_raw_parts(entries.as_ptr() as *const u8, entries_size) };
-
-        self.memory.write(IDT_ADDRESS, entries_data)?;
+        self.memory.write_val(IDT_ADDRESS, entries)?;
 
         Ok(())
     }
