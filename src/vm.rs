@@ -212,7 +212,7 @@ impl Vm {
         // 64 bits code segment
         let mut seg = kvm_segment {
             base: 0,
-            limit: 0xffffffff,
+            limit: 0,
             selector: 1 << 3, // Index 1, GDT, RPL = 0
             present: 1,
             type_: 11, /* Code: execute, read, accessed */
@@ -220,7 +220,7 @@ impl Vm {
             db: 0,
             s: 1, /* Code/data */
             l: 1,
-            g: 1, /* 4KB granularity */
+            g: 0,
             avl: 0,
             unusable: 0,
             padding: 0,

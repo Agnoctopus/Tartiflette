@@ -28,7 +28,6 @@ impl IdtEntry {
         }
     }
 }
-
 #[derive(Debug, Copy, Clone)]
 #[repr(u8)]
 pub enum PrivilegeLevel {
@@ -151,5 +150,47 @@ impl Ist {
         );
 
         self.entries[index] = address;
+    }
+}
+
+/// The tss in all of its glory
+#[repr(C, packed)]
+pub struct Tss {
+    data: [u32; 26],
+}
+
+/// TSS GDT entry
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug)]
+pub struct TssEntry {
+    segment_limit: u16,
+    base_00_15: u16,
+    packed_0: u16,
+    packed_1: u16,
+    base_63_32: u32,
+    reserved: u32,
+}
+
+impl TssEntry {
+    /// Creates a new TSS entry.
+    pub fn new(base: u64, dpl: PrivilegeLevel) -> TssEntry {
+        let limit: usize = core::mem::size_of::<Tss>() - 1;
+
+        let mut packed_0: u16 = 1 << 15; // present
+        packed_0 |= (dpl as u16) << 13; // dpl
+        packed_0 |= 0b11 << 8; // Type 3: Read/Write + Accessed
+        packed_0 |= ((base >> 16) & 0xff) as u16; // base 23:16
+
+        let mut packed_1: u16 = ((limit >> 16) & 0b111) as u16; // limit 19:16
+        packed_1 |= ((base >> 24) & 0xff) as u16; // base 31:24, G = 0, AVL = 0
+
+        TssEntry {
+            segment_limit: limit as u16,
+            base_00_15: base as u16,
+            packed_0: packed_0,
+            packed_1: packed_1,
+            base_63_32: (base >> 32) as u32,
+            reserved: 0,
+        }
     }
 }
