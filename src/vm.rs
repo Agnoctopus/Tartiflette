@@ -1,5 +1,5 @@
 //! Virtual Machine system
-use crate::x64::{Dpl, IdtEntry, IdtEntryBuilder, IdtEntryType};
+use crate::x64::{IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel};
 use std::collections::BTreeMap;
 
 use kvm_bindings::{
@@ -159,8 +159,8 @@ impl Vm {
         for i in 0..32 {
             entries[i] = IdtEntryBuilder::new()
                 .base(HANDLERS_ADDR + (i * 32) as u64)
-                .dpl(Dpl::Ring0)
-                .segment_selector(self.sregs.cs.selector)
+                .dpl(PrivilegeLevel::Ring0)
+                .segment_selector(1, PrivilegeLevel::Ring0)
                 .gate_type(IdtEntryType::Trap)
                 .collect();
         }
@@ -213,7 +213,7 @@ impl Vm {
         let mut seg = kvm_segment {
             base: 0,
             limit: 0xffffffff,
-            selector: 1 << 3,
+            selector: 1 << 3, // Index 1, GDT, RPL = 0
             present: 1,
             type_: 11, /* Code: execute, read, accessed */
             dpl: 0,
@@ -228,7 +228,7 @@ impl Vm {
 
         sregs.cs = seg;
 
-        seg.selector = 0;
+        // seg.selector = 0;
         seg.type_ = 3;
 
         sregs.ds = seg;
