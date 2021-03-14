@@ -1,5 +1,5 @@
 //! Virtual Machine system
-use crate::x64::{IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel};
+use crate::x64::{IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss, TssEntry};
 use std::collections::BTreeMap;
 
 use kvm_bindings::{
@@ -113,9 +113,13 @@ impl Vm {
 
     fn setup_exception_handling(&mut self) -> Result<()> {
         // TODO: Change this to an option or something
-        const IDT_ADDRESS: u64 = 0xffffffffffa00000;
+        const IDT_ADDRESS: u64 = 0xffffffffff000000;
         const HANDLERS_ADDR: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
         const GDT_ADDRESS: u64 = HANDLERS_ADDR + PAGE_SIZE as u64;
+        const TSS_ADDRESS: u64 = GDT_ADDRESS + PAGE_SIZE as u64;
+
+        const STACK_ADDRESS: u64 = TSS_ADDRESS + PAGE_SIZE as u64;
+        const STACK_SIZE: usize = PAGE_SIZE * 64; // 64Kb of stack
 
         // GDT setup
         self.memory.mmap(
@@ -124,18 +128,43 @@ impl Vm {
             PagePermissions::READ | PagePermissions::WRITE,
         )?;
 
+        // TODO: Properly setup GDT (code segment entry + TSS entry)
+        //       Setup the tr sreg properly as well
         self.memory.write_val(GDT_ADDRESS, 0u64)?;
+
+        // Code segment
         self.memory
             .write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?;
+        // TSS
+        self.memory.write_val(
+            GDT_ADDRESS + 16,
+            TssEntry::new(TSS_ADDRESS, PrivilegeLevel::Ring0),
+        )?;
 
-        // Handlers setup
+        // Setup the tr register
+        self.sregs.tr = kvm_segment {
+            base: TSS_ADDRESS,
+            limit: (core::mem::size_of::<Tss>() - 1) as u32,
+            selector: 2 << 3, // Index 2, GDT, RPL = 0
+            present: 1,
+            type_: 11,
+            dpl: 0,
+            db: 0,
+            s: 0,
+            l: 1,
+            g: 0,
+            avl: 0,
+            unusable: 0,
+            padding: 0,
+        };
+
+        // Exception handlers setup
         self.memory.mmap(
             HANDLERS_ADDR,
             PAGE_SIZE,
             PagePermissions::READ | PagePermissions::EXECUTE,
         )?;
 
-        // Debug: Write a specific error code into rax for each exception before vmexit
         for i in 0..32 {
             let handler_code: &[u8] = &[
                 0x6a, i as u8, // push <exception index>
@@ -159,6 +188,7 @@ impl Vm {
                 .dpl(PrivilegeLevel::Ring0)
                 .segment_selector(1, PrivilegeLevel::Ring0)
                 .gate_type(IdtEntryType::Trap)
+                .ist(1)
                 .collect();
         }
 
@@ -168,6 +198,22 @@ impl Vm {
         self.sregs.gdt.limit = 0xFF;
 
         self.memory.write_val(IDT_ADDRESS, entries)?;
+
+        // Allocate the stack used for interrupt handling
+        self.memory.mmap(
+            STACK_ADDRESS,
+            STACK_SIZE,
+            PagePermissions::READ | PagePermissions::WRITE,
+        )?;
+
+        // Setup the TSS and the IST
+        self.memory
+            .mmap(TSS_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
+
+        let mut tss = Tss::new();
+        tss.set_ist(1, STACK_ADDRESS + (STACK_SIZE - 0x100) as u64);
+
+        self.memory.write_val(TSS_ADDRESS, tss)?;
 
         Ok(())
     }

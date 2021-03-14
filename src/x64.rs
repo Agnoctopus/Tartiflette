@@ -121,42 +121,32 @@ impl IdtEntryBuilder {
     }
 }
 
-/// Interupt Stack Table
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
-struct Ist {
-    /// Linear addresses of stack addresses
-    entries: [u64; 8],
-}
-
-impl Ist {
-    /// Creates a new Ist
-    pub fn new() -> Self {
-        Ist { entries: [0; 8] }
-    }
-
-    /// Returns the address contained in the Ist at the given index
-    pub fn get(&self, index: usize) -> u64 {
-        assert!(index > 7, "Index must be between 0 and 7 (got {})", index);
-        self.entries[index]
-    }
-
-    /// Sets the Ist entry at the given index.
-    pub fn set(&mut self, index: usize, address: u64) {
-        assert!(
-            index == 0 || index > 7,
-            "Index must be between 1 and 7 (got {})",
-            index
-        );
-
-        self.entries[index] = address;
-    }
-}
-
 /// The tss in all of its glory
 #[repr(C, packed)]
 pub struct Tss {
     data: [u32; 26],
+}
+
+impl Tss {
+    pub fn new() -> Self {
+        Tss {
+            data: Default::default(),
+        }
+    }
+
+    pub fn set_ist(&mut self, index: usize, address: u64) {
+        assert!(
+            index > 0 && index <= 7,
+            "Ist index must be between 1 and 7 (got {})",
+            index
+        );
+
+        const IST_START_INDEX: usize = 9;
+        let ist_entry_index = IST_START_INDEX + (index * 2);
+
+        self.data[ist_entry_index] = address as u32; // Address low
+        self.data[ist_entry_index + 1] = (address >> 32) as u32; // Address high
+    }
 }
 
 /// TSS GDT entry
@@ -178,7 +168,7 @@ impl TssEntry {
 
         let mut packed_0: u16 = 1 << 15; // present
         packed_0 |= (dpl as u16) << 13; // dpl
-        packed_0 |= 0b11 << 8; // Type 3: Read/Write + Accessed
+        packed_0 |= 11 << 8; // Type 11: TSS Busy
         packed_0 |= ((base >> 16) & 0xff) as u16; // base 23:16
 
         let mut packed_1: u16 = ((limit >> 16) & 0b111) as u16; // limit 19:16
