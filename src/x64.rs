@@ -154,16 +154,12 @@ impl Tss {
 
     pub fn set_ist(&mut self, index: usize, address: u64) {
         assert!(
-            index <= 7,
+            index > 0 && index <= 7,
             "Ist index must be between 1 and 7 (got {})",
             index
         );
 
-        const IST_START_INDEX: usize = 9;
-        //let ist_entry_index = IST_START_INDEX + (index * 2);
-
-        self.ist.istx[index] = address as u64; // Address low
-        //self.ist.istx[ist_entry_index + 1] = (address >> 32) as u32; // Address high
+        self.ist.istx[index - 1] = address as u64;
     }
 }
 
