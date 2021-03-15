@@ -188,7 +188,7 @@ impl Vm {
                 .dpl(PrivilegeLevel::Ring0)
                 .segment_selector(1, PrivilegeLevel::Ring0)
                 .gate_type(IdtEntryType::Trap)
-                .ist(1)
+                .ist(2)
                 .collect();
         }
 

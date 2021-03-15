@@ -120,32 +120,50 @@ impl IdtEntryBuilder {
         }
     }
 }
-
-/// The tss in all of its glory
+/// Define a table of 7 known good stack pointers that can be used for
+/// handling interrupts.
 #[repr(C, packed)]
+#[derive(Default)]
+pub struct InterruptStackTable {
+    istx: [u64; 7],
+}
+/// The TSS in all of its glory
+#[repr(C, packed)]
+#[derive(Default)]
 pub struct Tss {
-    data: [u32; 26],
+    /// Reserved
+    _reserved_1: u32,
+    /// RSPx
+    rspx: [u64; 3],
+    /// Reserved
+    _reserved_2: u64,
+    /// Interrupt stack table
+    ist: InterruptStackTable,
+    /// Reserved
+    _reserved_3: u64,
+    /// Reserved
+    _reserved_4: u16,
+    /// IOPB offset
+    iopb_offset: u16,
 }
 
 impl Tss {
     pub fn new() -> Self {
-        Tss {
-            data: Default::default(),
-        }
+        Tss::default()
     }
 
     pub fn set_ist(&mut self, index: usize, address: u64) {
         assert!(
-            index > 0 && index <= 7,
+            index <= 7,
             "Ist index must be between 1 and 7 (got {})",
             index
         );
 
         const IST_START_INDEX: usize = 9;
-        let ist_entry_index = IST_START_INDEX + (index * 2);
+        //let ist_entry_index = IST_START_INDEX + (index * 2);
 
-        self.data[ist_entry_index] = address as u32; // Address low
-        self.data[ist_entry_index + 1] = (address >> 32) as u32; // Address high
+        self.ist.istx[index] = address as u64; // Address low
+        //self.ist.istx[ist_entry_index + 1] = (address >> 32) as u32; // Address high
     }
 }
 
