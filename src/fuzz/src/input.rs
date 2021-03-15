@@ -121,7 +121,7 @@ pub fn input_init(config: &mut Config) -> Result<(), String> {
     }
 
     if file_count == 0 {
-        println!("No usable files in the input directory: {:?}", input_dir);
+        eprintln!("No usable files in the input directory: {:?}", input_dir);
     }
 
     if config.app_config.max_input_size == 0 {

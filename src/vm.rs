@@ -102,6 +102,18 @@ pub struct Vm {
     suspension_points: BTreeMap<u64, SuspensionPoint>,
 }
 
+impl std::fmt::Debug for Vm {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("Vm")
+            .field("memory", &self.memory)
+            .field("regs", &self.regs)
+            .field("sregs", &self.sregs)
+            .field("coverage", &self.coverage)
+            .field("coverage_points", &self.coverage_points)
+        .finish()
+    }
+}
+
 impl Vm {
     /// Create a new `Vm` instance
     pub fn new(kvm: &Kvm, memory: VirtualMemory) -> Result<Vm> {

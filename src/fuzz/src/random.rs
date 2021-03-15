@@ -42,7 +42,7 @@ impl Rand {
     #[inline]
     pub fn next(&mut self) -> u64 {
         let (s0, mut s1) = (self.seed[0], self.seed[1]);
-        let result = s0 + s1;
+        let result = s0.wrapping_add(s1);
 
         s1 ^= s0;
         self.seed[0] = Self::rotl(s0, 24) ^ s1 ^ (s1 << 16);

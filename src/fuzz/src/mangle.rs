@@ -847,6 +847,8 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
 
     for x in 0..change_count {
         let choice = case.rand.random_in(0..(mangle_funcs.len() - 1) as u64) as usize;
+        println!("Mangle in {}", choice);
+        let choice = 6;
         mangle_funcs[choice](case, app);
     }
 }
