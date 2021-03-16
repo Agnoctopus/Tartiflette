@@ -109,7 +109,7 @@ impl std::fmt::Debug for Vm {
             .field("regs", &self.regs)
             .field("sregs", &self.sregs)
             .field("coverage", &self.coverage)
-            .field("coverage_points", &self.coverage_points)
+            .field("coverage_points", &self.suspension_points)
         .finish()
     }
 }
