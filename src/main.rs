@@ -103,6 +103,10 @@ fn run() {
     let regs = vm.get_registers().expect("could not get registers");
 
     println!("Regs: {:#X?}", regs);
+
+    // Try to load vm from snapshot
+    let snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
+        .expect("could not load snapshot");
 }
 
 /// Main function

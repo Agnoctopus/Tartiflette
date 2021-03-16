@@ -358,6 +358,11 @@ impl Vm {
             }
         }
 
+        // Install coverage points
+        for &cov in snapshot.coverage.iter() {
+            vm.add_coverage_point(cov)?;
+        }
+
         vm.set_initial_regs(regs);
         vm.commit_registers()?;
 

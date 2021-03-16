@@ -60,6 +60,20 @@ where
     ))
 }
 
+fn map_str_to_stru64<'de, D>(deserializer: D) -> core::result::Result<Vec<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Vec<String> = Vec::deserialize(deserializer)?;
+    let converted_values: Vec<u64> = v
+        .iter()
+        .map(|x| u64::from_str_radix(x, 16))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(de::Error::custom)?;
+
+    Ok(converted_values)
+}
+
 type Result<T> = std::result::Result<T, SnapshotError>;
 
 /// Memory mapping from a snapshot
@@ -103,8 +117,9 @@ pub struct Snapshot {
     #[serde(default)]
     pub symbols: BTreeMap<String, u64>,
     /// List of basic block addresses used for coverage
+    #[serde(deserialize_with = "map_str_to_stru64")]
     #[serde(default)]
-    coverage: Vec<u64>,
+    pub coverage: Vec<u64>,
     /// File descriptor over the raw memory region
     #[serde(skip)]
     #[serde(default)]
