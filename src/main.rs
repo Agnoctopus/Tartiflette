@@ -68,6 +68,8 @@ fn run() {
     assert!(kvm.get_api_version() >= 12);
     setup_timer();
 
+    /*
+
     // Setup virtual memory
     let mut vm_mem = VirtualMemory::new(512 * 0x1000).expect("Could not allocate Vm memory");
     vm_mem
@@ -104,9 +106,20 @@ fn run() {
 
     println!("Regs: {:#X?}", regs);
 
+    */
+
     // Try to load vm from snapshot
     let snapshot = Snapshot::new("/home/sideway/sources/Tartiflette/snapshot_info.json")
         .expect("could not load snapshot");
+
+    let mut vm_snap =
+        Vm::from_snapshot(&kvm, &snapshot, snapshot.size() * 2).expect("could not create vm");
+
+    vm_snap
+        .add_exit_point(0x555555555267)
+        .expect("could not add exit point");
+
+    vm_snap.run();
 }
 
 /// Main function
