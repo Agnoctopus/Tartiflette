@@ -1,5 +1,8 @@
 //! Virtual Machine system
-use crate::x64::{IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss, TssEntry};
+use crate::x64::{
+    ExceptionFrame, ExceptionType, IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss,
+    TssEntry,
+};
 use std::collections::BTreeMap;
 
 use kvm_bindings::{
@@ -495,14 +498,19 @@ impl Vm {
                 }
                 // -1 as hlt takes the ip after its instruction
                 VcpuExit::Hlt => {
-                    let mut output: [u8; 16] = [0; 16];
-                    self.memory.read(regs.rsp, output.as_mut())?;
+                    let exception_code: u64 = self.memory.read_val(regs.rsp)?;
+                    let exception_frame: ExceptionFrame = self.memory.read_val(regs.rsp + 8)?;
+                    println!(
+                        "Exception frame for exception #{}: {:#x?}",
+                        exception_code, exception_frame
+                    );
 
-                    for e in output.iter() {
-                        print!("{:02x} ", e);
+                    let exception_type = ExceptionType::from(exception_code);
+
+                    match exception_type {
+                        ExceptionType::PageFault => println!("Page fault !"),
+                        _ => println!("Unhandled exception"),
                     }
-
-                    println!("");
 
                     break VmExit::Hlt(regs.rip - 1);
                 }

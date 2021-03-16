@@ -198,3 +198,70 @@ impl TssEntry {
         }
     }
 }
+
+/// IA-32e exception frame
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
+pub struct ExceptionFrame {
+    error_code: u64,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ExceptionType {
+    DivideError,
+    Debug,
+    NMI,
+    Breakpoint,
+    Overflow,
+    BoundRangeExceeded,
+    InvalidOpcode,
+    DeviceNotAvailable,
+    DoubleFault,
+    CoprocessorSegmentOverrun,
+    InvalidTSS,
+    SegmentNotPresent,
+    StackFault,
+    GeneralProtection,
+    PageFault,
+    X87FPU,
+    AlignmentCheck,
+    MachineCheck,
+    SIMD,
+    Virtualization,
+    ControlProtection,
+    UserDefined(u64),
+}
+
+impl From<u64> for ExceptionType {
+    fn from(code: u64) -> Self {
+        match code {
+            0 => ExceptionType::DivideError,
+            1 => ExceptionType::Debug,
+            2 => ExceptionType::NMI,
+            3 => ExceptionType::Breakpoint,
+            4 => ExceptionType::Overflow,
+            5 => ExceptionType::BoundRangeExceeded,
+            6 => ExceptionType::InvalidOpcode,
+            7 => ExceptionType::DeviceNotAvailable,
+            8 => ExceptionType::DoubleFault,
+            9 => ExceptionType::CoprocessorSegmentOverrun,
+            10 => ExceptionType::InvalidTSS,
+            11 => ExceptionType::SegmentNotPresent,
+            12 => ExceptionType::StackFault,
+            13 => ExceptionType::GeneralProtection,
+            14 => ExceptionType::PageFault,
+            16 => ExceptionType::X87FPU,
+            17 => ExceptionType::AlignmentCheck,
+            18 => ExceptionType::MachineCheck,
+            19 => ExceptionType::SIMD,
+            20 => ExceptionType::Virtualization,
+            21 => ExceptionType::ControlProtection,
+            _ => ExceptionType::UserDefined(code),
+        }
+    }
+}
