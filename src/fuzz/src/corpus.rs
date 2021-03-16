@@ -112,7 +112,6 @@ pub struct FuzzInput {
     pub path: String,
 
     pub data: Vec<u8>,
-    pub size: usize,
 
     pub cov: FuzzCov,
     pub idx: usize,
@@ -126,8 +125,9 @@ impl Default for FuzzInput {
         Self {
             path: String::from(""),
             filename: String::from(""),
+
             data: Vec::new(),
-            size: 0,
+
             cov: FuzzCov::default(),
             idx: 0,
             refs: 0,
@@ -137,13 +137,21 @@ impl Default for FuzzInput {
 }
 
 impl FuzzInput {
+    /// Create a new `FuzzInput` instance
+    pub fn new(app: &App) -> Self {
+        Self {
+            data: Vec::with_capacity(app.config.app_config.max_input_size),
+            ..Default::default()
+        }
+    }
+
     /// Generate a filename based on the contained data
     #[inline]
     pub fn generate_filename(&self) -> String {
         format!(
             "{:x}.{:x}.cov",
-            md5::compute(&self.data[..self.size]),
-            self.size
+            md5::compute(&self.data),
+            self.data.len()
         )
     }
 
@@ -152,7 +160,6 @@ impl FuzzInput {
             path: self.generate_filename(),
             filename: self.generate_filename(),
             data: self.data.clone(),
-            size: self.size,
             cov: self.cov,
             idx: app.metrics.fuzz_input_count.fetch_add(1, Ordering::Relaxed),
             refs: 0,

@@ -49,7 +49,11 @@ impl FuzzCase {
     pub fn new(app: &App) -> Self {
         let vm = {
             let exe = app.exe.lock().unwrap();
-            exe.vm.as_ref().unwrap().fork(&exe.kvm.as_ref().unwrap()).unwrap()
+            exe.vm
+                .as_ref()
+                .unwrap()
+                .fork(&exe.kvm.as_ref().unwrap())
+                .unwrap()
         };
 
         Self {
@@ -57,7 +61,7 @@ impl FuzzCase {
             start_instant: Instant::now(),
 
             pid: None,
-            input: FuzzInput::default(),
+            input: FuzzInput::new(app),
             vm: Some(vm),
 
             static_file_try_more: false,
@@ -69,7 +73,7 @@ impl FuzzCase {
     }
 
     pub fn set_input_size(&mut self, size: usize, config: &Config) {
-        if self.input.size == size {
+        if self.input.data.len() == size {
             return;
         }
 
@@ -79,7 +83,7 @@ impl FuzzCase {
                 size, config.app_config.max_input_size
             );
         }
-        self.input.size = size;
+        self.input.data.resize(size, 0);
     }
 
     /// Run
@@ -89,7 +93,11 @@ impl FuzzCase {
         println!("Run FuzzCase");
         {
             let exe = app.exe.lock().unwrap();
-            self.vm.as_mut().unwrap().reset(exe.vm.as_ref().unwrap()).unwrap();
+            self.vm
+                .as_mut()
+                .unwrap()
+                .reset(exe.vm.as_ref().unwrap())
+                .unwrap();
         };
 
         let elasped = self.start_instant.elapsed().as_millis() as usize;
@@ -114,8 +122,8 @@ fn write_cov_file(dir: &str, file: &FuzzInput) {
     }
 
     println!("Adding file {} to the corpus directory {}", file_name, dir);
-    println!("Written {} bytes to {:?}", file.size, file_path);
-    std::fs::write(file_path, &file.data[..file.size]).unwrap();
+    println!("Written {} bytes to {:?}", file.data.len(), file_path);
+    std::fs::write(file_path, &file.data[..file.data.len()]).unwrap();
 }
 
 fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
@@ -136,7 +144,7 @@ fn add_dynamic_input(case: &mut FuzzCase, app: &App) {
     // Max fuzz file size
     {
         let mut max_size = app.metrics.fuzz_input_max_size.lock().unwrap();
-        *max_size = cmp::max(*max_size, fuzz_file.size);
+        *max_size = cmp::max(*max_size, fuzz_file.data.len());
     }
 
     if !app.config.app_config.socket_fuzzer {
@@ -237,6 +245,7 @@ fn minimize_remove_files(case: &mut FuzzCase) {
 fn input_should_read_new_file(app: &App, case: &mut FuzzCase) -> bool {
     if app.get_mode() != Mode::DynamicDryRun {
         case.set_input_size(app.config.app_config.max_input_size, &app.config);
+
         return true;
     }
 
@@ -247,10 +256,12 @@ fn input_should_read_new_file(app: &App, case: &mut FuzzCase) -> bool {
             std::cmp::min(4, app.config.app_config.max_input_size),
             &app.config,
         );
+        println!("{}", case.input.data.len());
+
         return true;
     }
 
-    let new_size = std::cmp::max(case.input.size * 2, app.config.app_config.max_input_size);
+    let new_size = std::cmp::max(case.input.data.len() * 2, app.config.app_config.max_input_size);
     if new_size == app.config.app_config.max_input_size {
         case.static_file_try_more = false;
     }
@@ -289,16 +300,16 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
     }
 
     let mut file = std::fs::File::open(ent.as_ref().unwrap()).unwrap();
-    case.input.data = vec![0; case.input.size];
+    case.input.data = vec![0; case.input.data.len()];
     let size = file.read(&mut case.input.data).unwrap();
     println!(
         "Read {} bytes / {} from {:?}",
         size,
-        case.input.size,
+        case.input.data.len(),
         ent.as_ref().unwrap()
     );
 
-    if case.static_file_try_more && size < case.input.size {
+    if case.static_file_try_more && size < case.input.data.len() {
         // The file is smaller than the requested size, no need to reread it anymore
         case.static_file_try_more = false;
     }
@@ -358,9 +369,9 @@ fn input_skip_factor(app: &App, case: &mut FuzzCase, file: &FuzzInput) -> (isize
     }
 
     /* Add penalty for the input being too big - 0 is for 1kB inputs */
-    if file.size > 0 {
+    if file.data.len() > 0 {
         let mut bias =
-            ((core::mem::size_of::<isize>() * 8) as u32 - file.size.leading_zeros() - 1) as isize;
+            ((core::mem::size_of::<isize>() * 8) as u32 - file.data.len().leading_zeros() - 1) as isize;
         bias -= 10;
         bias = bias.clamp(-5, 5);
         penalty += bias;
@@ -410,7 +421,7 @@ fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
     }
     *app.current_file.lock().unwrap() = files.next().map(|file| file.path.clone());
 
-    case.set_input_size(file.size, &app.config);
+    case.set_input_size(file.data.len(), &app.config);
     case.input.idx = file.idx;
     case.input.exec_usec = file.exec_usec;
     //case.input.src = file;
@@ -564,6 +575,7 @@ pub fn fuzz(config: Config) {
     // Create the App
     let mode = compute_fuzz_mode(&config);
     let app = Arc::new(App::new(config, mode));
+    println!("{:#?}", app);
 
     // Loop through numbers of jobs
     for i in 0..app.config.app_config.jobs {

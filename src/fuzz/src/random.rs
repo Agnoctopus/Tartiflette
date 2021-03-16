@@ -1,6 +1,6 @@
 //! Random utils
 
-use std::convert::TryInto;
+use std::{convert::TryInto, panic::Location};
 use std::ops::Range;
 
 use getrandom::getrandom;
@@ -54,7 +54,7 @@ impl Rand {
     /// Get the next pseudo-random value inside a range
     #[inline]
     pub fn random_in(&mut self, range: Range<u64>) -> u64 {
-        assert!(!range.is_empty());
+        assert!(range.end >= range.start);
 
         (self.next() % (range.end - range.start + 1)) + range.start
     }

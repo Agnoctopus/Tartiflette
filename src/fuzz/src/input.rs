@@ -150,5 +150,5 @@ pub fn get_random_input(app: &App) -> Vec<u8> {
     let file = files.next().unwrap();
     *app.current_file.lock().unwrap() = files.next().map(|file| file.path.clone());
 
-    return file.data[..file.size].to_vec();
+    return file.data[..file.data.len()].to_vec();
 }

@@ -9,6 +9,7 @@ use crate::fuzz::FuzzCase;
 use crate::input;
 use crate::random::Rand;
 
+/// Magic table
 const MAGIC_TABLE: &[&[u8]] = &[
     // 1 byte no endianness
     b"\x00",
@@ -261,62 +262,62 @@ fn mangle_buf_to_ascii(rand: &mut Rand, buff: &mut [u8]) {
     }
 }
 
+/// Compute the number of bytes from an offset to the end
 fn mangle_len_left(case: &mut FuzzCase, off: usize) -> usize {
-    if off >= case.input.size {
-        panic!();
+    if off >= case.input.data.len() {
+        panic!("Offset out of bound: {} > {}", off, case.input.data.len());
     }
-    case.input.size - off - 1
+    case.input.data.len() - off - 1
 }
 
 /// Get a random value <1:max>, but prefer smaller ones
 /// Based on an idea by https://twitter.com/gamozolabs
 ///
 fn mangle_get_len(rand: &mut Rand, max: usize) -> usize {
-    if max > input::INPUT_MIN_SIZE || max == 0 {
-        panic!();
+    if max > input::INPUT_MAX_SIZE {
+        panic!("Random range out of bound {} > {}", max, input::INPUT_MAX_SIZE);
+    }
+    else if max == 0 {
+        panic!("Null random range");
     }
 
-    if max == 1 {
-        return 1;
-    }
-
-    /* Give 50% chance the the uniform distribution */
+    // Give 50% chance the the uniform distribution
     if rand.next() & 1 == 1 {
         return rand.random_in(1..max as u64) as usize;
     }
 
-    /* effectively exprand() */
+    // Effectively exprand() */
     let max = rand.random_in(1..max as u64);
     return rand.random_in(1..max) as usize;
 }
 
 fn mangle_get_offset(case: &mut FuzzCase) -> usize {
     // Prefer smaller values here, so use mangle_getLen()
-    mangle_get_len(&mut case.rand, case.input.size) - 1
+    mangle_get_len(&mut case.rand, case.input.data.len()) - 1
 }
 
 fn mangle_get_offset_inc(case: &mut FuzzCase) -> usize {
     // Offset which can be equal to the file size
     mangle_get_len(
         &mut case.rand,
-        input::INPUT_MAX_SIZE.min(case.input.size + 1),
+        input::INPUT_MAX_SIZE.min(case.input.data.len() + 1),
     ) - 1
 }
 fn mangle_move(case: &mut FuzzCase, off_from: usize, off_to: usize, mut len: usize) {
-    if off_from >= case.input.size {
+    if off_from >= case.input.data.len() {
         return;
     }
-    if off_to >= case.input.size {
+    if off_to >= case.input.data.len() {
         return;
     }
     if off_from == off_to {
         return;
     }
 
-    let len_from = case.input.size - off_from;
+    let len_from = case.input.data.len() - off_from;
     len = len_from.min(len);
 
-    let len_to = case.input.size - off_to;
+    let len_to = case.input.data.len() - off_to;
     len = len_to.min(len);
 
     case.input
@@ -330,7 +331,7 @@ fn mangle_overwrite(case: &mut FuzzCase, off: usize, src: &[u8], app: &App) {
         return;
     }
 
-    let max_to_copy = case.input.size - off;
+    let max_to_copy = case.input.data.len() - off;
     len = len.min(max_to_copy);
 
     case.input.data[off..off + len].copy_from_slice(&src[..len]);
@@ -340,13 +341,13 @@ fn mangle_overwrite(case: &mut FuzzCase, off: usize, src: &[u8], app: &App) {
 }
 
 fn mangle_inflate(case: &mut FuzzCase, off: usize, len: usize, app: &App) -> usize {
-    if case.input.size >= app.config.app_config.max_input_size {
+    if case.input.data.len() >= app.config.app_config.max_input_size {
         return 0;
     }
-    let len = len.min(app.config.app_config.max_input_size - case.input.size);
+    let len = len.min(app.config.app_config.max_input_size - case.input.data.len());
 
-    case.set_input_size(case.input.size + len, &app.config);
-    mangle_move(case, off, off + len, case.input.size);
+    case.set_input_size(case.input.data.len() + len, &app.config);
+    mangle_move(case, off, off + len, case.input.data.len());
 
     if app.config.app_config.random_ascii {
         for byte in case.input.data[off..off + len].iter_mut() {
@@ -382,9 +383,9 @@ fn mangle_use_value_at(case: &mut FuzzCase, off: usize, data: &[u8], app: &App) 
 
 fn mangle_mem_swap(case: &mut FuzzCase, _app: &App) {
     let off1 = mangle_get_offset(case);
-    let max_len1 = case.input.size - off1;
+    let max_len1 = case.input.data.len() - off1;
     let off2 = mangle_get_offset(case);
-    let max_len2 = case.input.size - off2;
+    let max_len2 = case.input.data.len() - off2;
     let len = mangle_get_len(&mut case.rand, core::cmp::min(max_len1, max_len2));
 
     if off1 == off2 {
@@ -404,7 +405,7 @@ fn mangle_mem_swap(case: &mut FuzzCase, _app: &App) {
 
 fn mangle_mem_copy(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
-    let len = mangle_get_len(&mut case.rand, case.input.size - off);
+    let len = mangle_get_len(&mut case.rand, case.input.data.len() - off);
 
     let data = case.input.data[off..off + len].to_vec();
 
@@ -423,7 +424,7 @@ fn mangle_bytes(case: &mut FuzzCase, app: &App) {
 fn mangle_byte_repeat_overwrite(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
     let dest_off = off + 1;
-    let max_size = case.input.size - dest_off;
+    let max_size = case.input.data.len() - dest_off;
 
     // No space to repeat
     if max_size == 0 {
@@ -440,7 +441,7 @@ fn mangle_byte_repeat_overwrite(case: &mut FuzzCase, app: &App) {
 fn mangle_byte_repeat_insert(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
     let dest_off = off + 1;
-    let max_size = case.input.size - dest_off;
+    let max_size = case.input.data.len() - dest_off;
 
     // No space to repeat
     if max_size == 0 {
@@ -508,7 +509,7 @@ fn mangle_const_feedback_dict(case: &mut FuzzCase, app: &App) {
 
 fn mangle_memset(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
-    let len = mangle_get_len(&mut case.rand, case.input.size - off);
+    let len = mangle_get_len(&mut case.rand, case.input.data.len() - off);
     let val = match app.config.app_config.random_ascii {
         true => case.rand.random_in(32..126) as u8,
         false => case.rand.random_in(0..256) as u8,
@@ -521,7 +522,7 @@ fn mangle_memset(case: &mut FuzzCase, app: &App) {
 
 fn mangle_memclear(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
-    let len = mangle_get_len(&mut case.rand, case.input.size - off);
+    let len = mangle_get_len(&mut case.rand, case.input.data.len() - off);
     let val = match app.config.app_config.random_ascii {
         true => ' ' as u8,
         false => 0,
@@ -534,7 +535,7 @@ fn mangle_memclear(case: &mut FuzzCase, app: &App) {
 
 fn mangle_random_overwrite(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
-    let len = mangle_get_len(&mut case.rand, case.input.size - off);
+    let len = mangle_get_len(&mut case.rand, case.input.data.len() - off);
 
     mangle_random_buf(
         &mut case.rand,
@@ -545,7 +546,7 @@ fn mangle_random_overwrite(case: &mut FuzzCase, app: &App) {
 
 fn mangle_random_insert(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
-    let len = mangle_get_len(&mut case.rand, case.input.size - off);
+    let len = mangle_get_len(&mut case.rand, case.input.data.len() - off);
 
     let len = mangle_inflate(case, off, len, app);
     mangle_random_buf(
@@ -609,7 +610,7 @@ fn mangle_add_sub(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
 
     let mut var_len = 1 << case.rand.random_in(0..3);
-    if case.input.size - off < var_len {
+    if case.input.data.len() - off < var_len {
         var_len = 1
     }
 
@@ -664,7 +665,7 @@ fn mangle_expand(case: &mut FuzzCase, app: &App) {
 }
 
 fn mangle_shrink(case: &mut FuzzCase, app: &App) {
-    if case.input.size <= 2 {
+    if case.input.data.len() <= 2 {
         return;
     }
 
@@ -681,10 +682,10 @@ fn mangle_shrink(case: &mut FuzzCase, app: &App) {
     }
 
     let off_end = off_start + len;
-    let len_to_move = case.input.size - off_end;
+    let len_to_move = case.input.data.len() - off_end;
 
     mangle_move(case, off_end, off_start, len_to_move);
-    case.set_input_size(case.input.size - len, &app.config);
+    case.set_input_size(case.input.data.len() - len, &app.config);
 }
 
 fn mangle_ascii_num(case: &mut FuzzCase, app: &App) {
@@ -700,7 +701,7 @@ fn mangle_ascii_num_change(case: &mut FuzzCase, app: &App) {
     let off = mangle_get_offset(case);
 
     // Find a digit
-    let index = match case.input.data[off..case.input.size]
+    let index = match case.input.data[off..case.input.data.len()]
         .iter()
         .position(|byte| byte.is_ascii_digit())
         .map(|position| position + off)
@@ -710,7 +711,7 @@ fn mangle_ascii_num_change(case: &mut FuzzCase, app: &App) {
     };
 
     // Compute left len
-    let left = case.input.size - off;
+    let left = case.input.data.len() - off;
     if left == 0 {
         return;
     }
@@ -757,28 +758,28 @@ fn mangle_splice(case: &mut FuzzCase, app: &App) {
 }
 
 fn mangle_resize(case: &mut FuzzCase, app: &App) {
-    let old_size = case.input.size as u64;
+    let old_size = case.input.data.len() as isize;
 
     let choice = case.rand.random_in(0..32);
     let mut new_size = match choice {
         /* Set new size arbitrarily */
         0 => case
             .rand
-            .random_in(1..app.config.app_config.max_input_size as u64),
+            .random_in(1..app.config.app_config.max_input_size as u64) as isize,
         /* Increase size by a small value */
-        1..=4 => case.rand.random_in(0..8),
+        1..=4 => case.rand.random_in(0..8) as isize,
         /* Increase size by a larger value */
-        5 => case.rand.random_in(9..120),
+        5 => case.rand.random_in(9..120) as isize,
         /* Decrease size by a small value */
-        6..=9 => old_size - case.rand.random_in(0..8),
+        6..=9 => old_size - case.rand.random_in(0..8) as isize,
         /* Decrease size by a larger value */
-        10 => old_size - case.rand.random_in(9..128),
+        10 => old_size - case.rand.random_in(9..128) as isize,
         /* Do nothing */
         11..=32 => old_size,
-        _ => unimplemented!(),
+        _ => unreachable!(),
     };
 
-    new_size = new_size.clamp(1, app.config.app_config.max_input_size as u64);
+    new_size = new_size.clamp(1, app.config.app_config.max_input_size as isize);
     case.set_input_size(new_size as usize, &app.config);
 
     if new_size > old_size {
@@ -823,7 +824,8 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
         return;
     }
 
-    if case.input.size == 0 {
+    if case.input.data.len() == 0 {
+        println!("resize");
         mangle_resize(case, app);
     }
 
@@ -847,7 +849,7 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
 
     for x in 0..change_count {
         let choice = case.rand.random_in(0..(mangle_funcs.len() - 1) as u64) as usize;
-        println!("Mangle in {}", choice);
+        println!("Mangle in {}: {} bytes", choice, case.input.data.len());
         let choice = 6;
         mangle_funcs[choice](case, app);
     }
