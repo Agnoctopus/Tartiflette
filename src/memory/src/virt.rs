@@ -49,7 +49,9 @@ impl VirtualMemory {
             return Err(MemoryError::AddressAlreadyMapped(addr.address()));
         }
 
+        // Get a frame to map page to
         let frame = self.pmem.allocate_frame().ok_or(MemoryError::OutOfMemory)?;
+        println!("address: {:x} to frame: {:x}", addr.address(), frame);
 
         // Set p1 entry
         p1.entries[addr.p1_index()].set_address(frame as u64);

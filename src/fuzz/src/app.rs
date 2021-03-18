@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Local};
 use kvm_ioctls::Kvm;
+use memory::PagePermissions;
 use snapshot::Snapshot;
 use tartiflette::vm::Vm;
 
@@ -158,7 +159,15 @@ impl Exe {
             let mut snapshot = Snapshot::new(config.exe_config.snapshot.as_ref().unwrap())
                 .expect("Snapshot loading failed");
             let snapshot_size = snapshot.size();
-            let vm = Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+            let mut vm =
+                Vm::from_snapshot(&kvm, &mut snapshot, snapshot_size * 2).expect("vm failed");
+            vm.add_exit_point(0x555555555267).unwrap();
+            vm.memory
+                .mmap(0x80_000, 0x1000, memory::PagePermissions::READ)
+                .unwrap();
+            let mut regs = vm.get_initial_regs();
+            regs.rdi = 0x80_000;
+            vm.set_initial_regs(regs);
 
             exe.kvm = Some(kvm);
             exe.snapshot = Some(snapshot);

@@ -1,7 +1,7 @@
 //! Random utils
 
-use std::{convert::TryInto, panic::Location};
 use std::ops::Range;
+use std::{convert::TryInto, panic::Location};
 
 use getrandom::getrandom;
 

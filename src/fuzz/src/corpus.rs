@@ -148,11 +148,7 @@ impl FuzzInput {
     /// Generate a filename based on the contained data
     #[inline]
     pub fn generate_filename(&self) -> String {
-        format!(
-            "{:x}.{:x}.cov",
-            md5::compute(&self.data),
-            self.data.len()
-        )
+        format!("{:x}.{:x}.cov", md5::compute(&self.data), self.data.len())
     }
 
     pub fn fork(&self, exec_usec: usize, app: &App) -> Self {

@@ -275,9 +275,12 @@ fn mangle_len_left(case: &mut FuzzCase, off: usize) -> usize {
 ///
 fn mangle_get_len(rand: &mut Rand, max: usize) -> usize {
     if max > input::INPUT_MAX_SIZE {
-        panic!("Random range out of bound {} > {}", max, input::INPUT_MAX_SIZE);
-    }
-    else if max == 0 {
+        panic!(
+            "Random range out of bound {} > {}",
+            max,
+            input::INPUT_MAX_SIZE
+        );
+    } else if max == 0 {
         panic!("Null random range");
     }
 

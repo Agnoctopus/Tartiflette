@@ -91,7 +91,7 @@ pub struct Vm {
     /// VM cpu
     cpu: VcpuFd,
     /// VM virtual memory
-    memory: VirtualMemory,
+    pub memory: VirtualMemory,
     /// General purpose registers used for the run
     regs: kvm_regs,
     /// Special purpose registers used for the run
@@ -462,13 +462,36 @@ impl Vm {
         for (bm_idx, bm) in log.into_iter().enumerate() {
             for bit_idx in 0..64 {
                 if bm.is_bit_set(bit_idx) {
+                    // Compute physical address
                     let frame_index = (bm_idx * 64) + bit_idx;
                     let pa = frame_index * PAGE_SIZE;
 
+                    // Get original data
                     let orig_data = other.memory.pmem.raw_slice(pa, PAGE_SIZE)?;
+
+                    // Reset original data
                     self.memory.pmem.write(pa, orig_data)?;
                 }
             }
+        }
+
+        /*
+           let mut pa = 0;
+           for (a,b)in (other.memory.pmem.raw_slice(0, other.memory.pmem.size()).unwrap().iter().zip(
+           self.memory.pmem.raw_slice(0, other.memory.pmem.size()).unwrap())) {
+           if a != b {
+           println!("address: {:x}: {} - {}", pa, a, b);
+
+                    }
+                    pa += 1;
+
+                }
+        println!("Value: {:x}", self.memory.pmem.read_val::<u8>(0x5265).unwrap());
+ */
+
+        for &addr in self.suspension_points.keys() {
+            // Write the breakpoint
+            self.memory.write(addr, &mut [0xcc])?;
         }
 
         // copy registers from other state
@@ -550,6 +573,12 @@ impl Vm {
         // Copy the registers state
         vm.regs = self.regs;
         vm.sregs = self.sregs;
+
+        // Copy of the suspension_points
+        vm.suspension_points = self.suspension_points.clone();
+
+        // Sets the original registers into kvm vcpu
+        vm.commit_registers()?;
 
         Ok(vm)
     }

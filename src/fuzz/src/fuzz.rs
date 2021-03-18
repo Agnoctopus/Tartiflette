@@ -1,14 +1,14 @@
 //! Fuzz system
 
-use std::cmp;
 use std::hint;
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, thread::sleep};
 
-use tartiflette::vm::Vm;
+use tartiflette::vm::{Vm, VmExit};
 
 use crate::app::App;
 use crate::app::Mode;
@@ -89,16 +89,32 @@ impl FuzzCase {
     /// Run
     pub fn run(&mut self, app: &App) -> Result<(), ()> {
         self.id = app.metrics.fuzz_case_count.fetch_add(1, Ordering::Relaxed);
+        let vm = self.vm.as_mut().unwrap();
 
-        println!("Run FuzzCase");
         {
             let exe = app.exe.lock().unwrap();
-            self.vm
-                .as_mut()
-                .unwrap()
-                .reset(exe.vm.as_ref().unwrap())
-                .unwrap();
+            vm.reset(exe.vm.as_ref().unwrap()).unwrap();
         };
+
+        println!("Run FuzzCase: {}bytes ", self.input.data.len());
+        vm.memory
+            .write(
+                0x80_000,
+                &self.input.data[..self.input.data.len().min(0x1000)],
+            )
+            .unwrap();
+
+        loop {
+            let res = vm.run();
+            println!("Result: {:x?}", res);
+
+            if let VmExit::Exit = res.unwrap() {
+                break;
+            }
+        }
+        println!("coverage: {:x?}", vm.get_coverage());
+
+        assert!(vm.get_coverage().len() == 1);
 
         let elasped = self.start_instant.elapsed().as_millis() as usize;
         let mut max_elasped = app.metrics.max_fuzz_run_time_ms.lock().unwrap();
@@ -261,7 +277,10 @@ fn input_should_read_new_file(app: &App, case: &mut FuzzCase) -> bool {
         return true;
     }
 
-    let new_size = std::cmp::max(case.input.data.len() * 2, app.config.app_config.max_input_size);
+    let new_size = std::cmp::max(
+        case.input.data.len() * 2,
+        app.config.app_config.max_input_size,
+    );
     if new_size == app.config.app_config.max_input_size {
         case.static_file_try_more = false;
     }
@@ -370,8 +389,9 @@ fn input_skip_factor(app: &App, case: &mut FuzzCase, file: &FuzzInput) -> (isize
 
     /* Add penalty for the input being too big - 0 is for 1kB inputs */
     if file.data.len() > 0 {
-        let mut bias =
-            ((core::mem::size_of::<isize>() * 8) as u32 - file.data.len().leading_zeros() - 1) as isize;
+        let mut bias = ((core::mem::size_of::<isize>() * 8) as u32
+            - file.data.len().leading_zeros()
+            - 1) as isize;
         bias -= 10;
         bias = bias.clamp(-5, 5);
         penalty += bias;
@@ -568,6 +588,34 @@ fn compute_fuzz_mode(config: &Config) -> Mode {
     mode
 }
 
+pub fn supervisor(app: Arc<App>) {
+    // Start a timer
+    let start = Instant::now();
+
+    let mut last_cases = 0;
+    let mut last_time = Instant::now();
+    loop {
+        sleep(std::time::Duration::from_millis(500));
+
+        let delta = start.elapsed().as_secs_f64();
+        let last_delta = last_time.elapsed().as_secs_f64();
+
+        let fuzz_cases = app.metrics.fuzz_case_count.load(Ordering::Relaxed);
+        eprintln!(
+            "[{:8.4}] Execs {:8} | exec/s {:8.0}",
+            delta,
+            fuzz_cases,
+            (fuzz_cases - last_cases) as f64 / last_delta,
+        );
+        last_cases = fuzz_cases;
+        last_time = Instant::now();
+
+        if app.is_terminating() {
+            break;
+        }
+    }
+}
+
 /// Start fuzzing
 pub fn fuzz(config: Config) {
     let mut threads = Vec::new();
@@ -595,6 +643,22 @@ pub fn fuzz(config: Config) {
             .unwrap();
         threads.push(thread);
     }
+
+    // Launch the supervisor
+    let builder = thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .name("fuzz_supervisor".to_string());
+
+    // Arc clone the App
+    let app = Arc::clone(&app);
+
+    // Launch the thread
+    let thread = builder
+        .spawn(move || {
+            supervisor(Arc::clone(&app));
+        })
+        .unwrap();
+    threads.push(thread);
 
     // Wait for thread completion
     for thread in threads {
