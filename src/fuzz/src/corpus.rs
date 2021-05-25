@@ -29,7 +29,7 @@ impl Corpus {
         // Make sure, while inserting the input, that it isn't already present
         assert!(self
             .filenames
-            .insert(input.path.clone(), input.cov)
+            .insert(input.filename.clone(), input.cov)
             .is_none());
 
         // Compute the index to place the input
@@ -67,8 +67,14 @@ impl Corpus {
             Err(index) => unreachable!(),
         };
 
-        // Inputs can have the same filenames, thus continue iterating to find
+        // Inputs can have the same coverages, thus continue iterating to find
         // the correct poisition
+        println!("filename: {}, index: {}", filename, index);
+        for input in &self.inputs {
+            println!("{:?}", input.filename);
+
+        }
+
         let position = index
             + self.inputs[index..]
                 .iter()
@@ -103,13 +109,18 @@ impl FuzzCov {
 
         cov
     }
+
+    /// Returns a mutable reference to the inner cov bytes
+    #[inline]
+    pub fn bytes(&mut self) -> &mut [usize; 4] {
+        &mut self.0
+    }
 }
 
 #[derive(Debug)]
 pub struct FuzzInput {
     /// Filename
     pub filename: String,
-    pub path: String,
 
     pub data: Vec<u8>,
 
@@ -123,7 +134,6 @@ pub struct FuzzInput {
 impl Default for FuzzInput {
     fn default() -> Self {
         Self {
-            path: String::from(""),
             filename: String::from(""),
 
             data: Vec::new(),
@@ -153,7 +163,6 @@ impl FuzzInput {
 
     pub fn fork(&self, exec_usec: usize, app: &App) -> Self {
         Self {
-            path: self.generate_filename(),
             filename: self.generate_filename(),
             data: self.data.clone(),
             cov: self.cov,

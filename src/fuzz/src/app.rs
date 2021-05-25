@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::corpus::{Corpus, FuzzCov};
 use crate::dico::Dico;
 use crate::feedback::FeedBack;
+use crate::input::Input;
 
 /// Perfoming mode of the application
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,6 +41,8 @@ pub struct App {
 
     /// Metrics
     pub metrics: Metrics,
+    /// Input
+    pub input: Input,
     /// Corpus
     pub corpus: Mutex<Corpus>,
     /// FeedBack
@@ -59,8 +62,10 @@ pub struct App {
 
 impl App {
     /// Create a new `App` instance
-    pub fn new(config: Config, mode: Mode) -> Self {
+    pub fn new(mut config: Config, mode: Mode) -> Self {
         let exe = Exe::new(&config);
+        let input = Input::new(&config).expect("Failed to create the input manager.");
+        config.app_config.max_input_size = input.max_entries_size();
 
         Self {
             config: config,
@@ -69,6 +74,7 @@ impl App {
             terminated_elapsed: AtomicUsize::new(0),
 
             metrics: Metrics::new(),
+            input: input,
             corpus: Mutex::new(Corpus::new()),
             feedback: Mutex::new(FeedBack::new()),
             exe: Mutex::new(exe),
@@ -120,6 +126,22 @@ impl App {
     pub fn should_terminate(&self) -> bool {
         let elapsed = self.terminated_elapsed.load(Ordering::Relaxed);
         self.metrics.start_instant.elapsed().as_secs() as usize > elapsed
+    }
+
+    /// Get random bytes from the app corpus
+    pub fn get_random_bytes(&self) -> Vec<u8> {
+        let corpus = self.corpus.lock().unwrap();
+        let mut current_file = self.current_file.lock().unwrap();
+
+        let mut files = match *current_file {
+            Some(ref path) => corpus.iter_from(path),
+            None => corpus.iter(),
+        };
+
+        let file = files.next().unwrap();
+        *current_file = files.next().map(|file| file.filename.clone());
+
+        return file.data[..file.data.len()].to_vec();
     }
 }
 

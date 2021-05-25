@@ -13,6 +13,7 @@ mod input;
 mod mangle;
 mod random;
 mod sanitize;
+mod utils;
 
 extern crate bits;
 extern crate tartiflette;
@@ -67,11 +68,6 @@ fn launch_program(mut config: Config) {
 }
 
 fn launch_snapshot(mut config: Config) {
-    if let Err(error) = input::input_init(&mut config) {
-        eprintln!("{}", error);
-        return;
-    }
-
     fuzz::fuzz(config);
 }
 

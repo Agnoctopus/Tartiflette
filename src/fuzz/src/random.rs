@@ -54,7 +54,7 @@ impl Rand {
     /// Get the next pseudo-random value inside a range
     #[inline]
     pub fn random_in(&mut self, range: Range<u64>) -> u64 {
-        assert!(range.end >= range.start);
+        assert!(range.end >= range.start, "Random in bad range");
 
         (self.next() % (range.end - range.start + 1)) + range.start
     }

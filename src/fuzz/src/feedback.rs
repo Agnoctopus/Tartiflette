@@ -68,6 +68,7 @@ impl CmpFeedBack {
 #[derive(Debug)]
 pub struct FeedBack {
     pub cmp_feedback_map: CmpFeedBack,
+    pub breakpoint_count: usize,
 }
 
 impl FeedBack {
@@ -75,6 +76,7 @@ impl FeedBack {
     pub fn new() -> Self {
         Self {
             cmp_feedback_map: CmpFeedBack::new(),
+            breakpoint_count: 0,
         }
     }
 }

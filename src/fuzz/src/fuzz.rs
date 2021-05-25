@@ -18,6 +18,7 @@ use crate::feedback::FeedBackMethod;
 use crate::input;
 use crate::mangle;
 use crate::random::Rand;
+use crate::utils::log2;
 
 #[derive(Debug)]
 pub struct FuzzWorker {}
@@ -96,7 +97,6 @@ impl FuzzCase {
             vm.reset(exe.vm.as_ref().unwrap()).unwrap();
         };
 
-        println!("Run FuzzCase: {}bytes ", self.input.data.len());
         vm.memory
             .write(
                 0x80_000,
@@ -106,19 +106,42 @@ impl FuzzCase {
 
         loop {
             let res = vm.run();
-            println!("Result: {:x?}", res);
 
             if let VmExit::Exit = res.unwrap() {
                 break;
             }
         }
-        println!("coverage: {:x?}", vm.get_coverage());
-
-        assert!(vm.get_coverage().len() == 1);
 
         let elasped = self.start_instant.elapsed().as_millis() as usize;
         let mut max_elasped = app.metrics.max_fuzz_run_time_ms.lock().unwrap();
         *max_elasped = max_elasped.max(elasped);
+
+        let coverage_count = vm.get_coverage().len();
+        if coverage_count > 0 {
+            println!("New coverage: {:x?}", coverage_count);
+
+            {
+                let mut feedback = app.feedback.lock().unwrap();
+                feedback.breakpoint_count += coverage_count;
+            }
+
+            let mut cov_bytes = self.input.cov.bytes();
+            cov_bytes[0] = 64 - log2(self.input.data.len()) as usize;
+
+
+            {
+                let corpus = app.corpus.lock().unwrap();
+                let file_name = self.input.generate_filename();
+
+                if !corpus.contains(&file_name) {
+                    core::mem::drop(corpus);
+                    add_dynamic_input(self, app);
+                }
+
+            }
+        }
+
+        // assert!(vm.get_coverage().len() == 1);
 
         Ok(())
     }
@@ -134,7 +157,8 @@ fn write_cov_file(dir: &str, file: &FuzzInput) {
             "File {} already exists in the output corpus directory",
             file_name
         );
-        panic!();
+        return;
+        todo!();
     }
 
     println!("Adding file {} to the corpus directory {}", file_name, dir);
@@ -228,12 +252,13 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
      */
     if app.metrics.fuzz_input_count.load(Ordering::Relaxed) == 0 {
         let mut fuzz_file = FuzzInput::default();
-        fuzz_file.path = "[DYNAMIC-0-SIZE]".to_string();
+        fuzz_file.filename = "[DYNAMIC-0-SIZE]".to_string();
         core::mem::swap(&mut fuzz_file, &mut case.input);
+        println!("Empty file!");
         add_dynamic_input(case, app);
         core::mem::swap(&mut fuzz_file, &mut case.input);
     }
-    case.input.path = "[DYNAMIC]".to_string();
+    case.input.filename = "[DYNAMIC]".to_string();
 
     if app.config.io_config.max_file_size == 0
         && app.config.app_config.max_input_size > input::INPUT_MIN_SIZE
@@ -250,7 +275,7 @@ fn set_dynamic_main_state(case: &mut FuzzCase, app: &App) {
         panic!();
     }
 
-    println!("Enteing phase 3/3: Dynamic Main (Feedback driven Mode)");
+    println!("Entering phase 3/3: Dynamic Main (Feedback driven Mode)");
     app.set_mode(Mode::DynamicMain);
 }
 
@@ -293,22 +318,14 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
     let mut ent = None;
 
     if input_should_read_new_file(&app, case) {
-        let entries = match input::input_get_entries(&app.config) {
-            Ok(entries) => entries,
-            Err(_) => return false,
-        };
-
-        for entry in entries {
+        for entry in app.input.entries() {
             println!("{:?}", entry);
             ent = Some(entry.clone());
 
             if !mangle {
                 let corpus = app.corpus.lock().unwrap();
-                if corpus.contains(entry.as_path().to_str().unwrap()) {
-                    eprintln!(
-                        "Skipping {:?}, as it's already in the dynamic corpus",
-                        entry.as_path()
-                    );
+                if corpus.contains(&entry) {
+                    eprintln!("Skipping {}, as it's already in the dynamic corpus", &entry);
                     break;
                 }
             }
@@ -317,8 +334,12 @@ fn fuzz_prepare_static_file(app: &App, case: &mut FuzzCase, mangle: bool) -> boo
                 .fetch_add(1, Ordering::Relaxed);
         }
     }
+    if ent.is_none() {
+        return false;
+    }
 
-    let mut file = std::fs::File::open(ent.as_ref().unwrap()).unwrap();
+    let pathname = app.input.get_path_to(ent.as_ref().unwrap());
+    let mut file = std::fs::File::open(pathname).unwrap();
     case.input.data = vec![0; case.input.data.len()];
     let size = file.read(&mut case.input.data).unwrap();
     println!(
@@ -439,7 +460,7 @@ fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
             }
         };
     }
-    *app.current_file.lock().unwrap() = files.next().map(|file| file.path.clone());
+    *app.current_file.lock().unwrap() = files.next().map(|file| file.filename.clone());
 
     case.set_input_size(file.data.len(), &app.config);
     case.input.idx = file.idx;
@@ -447,8 +468,10 @@ fn prepare_dynamic_input(app: &App, case: &mut FuzzCase, mangle: bool) -> bool {
     //case.input.src = file;
     case.input.refs = 0;
     case.input.cov = file.cov;
-    case.input.path = file.path.clone();
+    case.input.filename = file.filename.clone();
     case.input.data = file.data.clone();
+
+    core::mem::drop(corpus);
 
     if mangle {
         mangle::mangle_content(case, speed_factor, app)
@@ -509,6 +532,7 @@ fn fuzz_loop(app: &App, case: &mut FuzzCase) {
         }
         eprintln!("Could not prepare input for fuzzing");
     }
+
     if case.run(&app).is_err() {
         eprintln!("Couldn't run fuzzed command");
     }
@@ -595,8 +619,6 @@ pub fn supervisor(app: Arc<App>) {
     let mut last_cases = 0;
     let mut last_time = Instant::now();
     loop {
-        sleep(std::time::Duration::from_millis(500));
-
         let delta = start.elapsed().as_secs_f64();
         let last_delta = last_time.elapsed().as_secs_f64();
 
@@ -613,6 +635,8 @@ pub fn supervisor(app: Arc<App>) {
         if app.is_terminating() {
             break;
         }
+
+        sleep(std::time::Duration::from_millis(500));
     }
 }
 

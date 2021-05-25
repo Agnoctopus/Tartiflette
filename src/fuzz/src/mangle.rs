@@ -1,7 +1,7 @@
 //! Mangle subsystem
 
-use std::convert::TryInto;
 use std::sync::atomic::Ordering;
+use std::{convert::TryInto, panic::Location};
 
 use crate::app::App;
 use crate::config::Config;
@@ -271,8 +271,6 @@ fn mangle_len_left(case: &mut FuzzCase, off: usize) -> usize {
 }
 
 /// Get a random value <1:max>, but prefer smaller ones
-/// Based on an idea by https://twitter.com/gamozolabs
-///
 fn mangle_get_len(rand: &mut Rand, max: usize) -> usize {
     if max > input::INPUT_MAX_SIZE {
         panic!(
@@ -432,6 +430,7 @@ fn mangle_byte_repeat_overwrite(case: &mut FuzzCase, app: &App) {
     // No space to repeat
     if max_size == 0 {
         mangle_bytes(case, app);
+        return;
     }
 
     let len = mangle_get_len(&mut case.rand, max_size);
@@ -449,6 +448,7 @@ fn mangle_byte_repeat_insert(case: &mut FuzzCase, app: &App) {
     // No space to repeat
     if max_size == 0 {
         mangle_bytes(case, app);
+        return;
     }
 
     let len = mangle_get_len(&mut case.rand, max_size);
@@ -479,6 +479,7 @@ fn mangle_static_dict(case: &mut FuzzCase, app: &App) {
 
     if dico.entries.len() == 0 {
         mangle_bytes(case, app);
+        return;
     }
 
     let choice = case.rand.random_in(0..dico.entries.len() as u64) as usize;
@@ -570,15 +571,15 @@ fn mangle_add_sub_with_range(
 
     match var_len {
         1 => {
-            case.input.data[off] += delta as u8;
+            case.input.data[off] = case.input.data[off].wrapping_add(delta as u8);
         }
         2 => {
             let mut val = i16::from_ne_bytes(case.input.data[off..off + 2].try_into().unwrap());
             if case.rand.random_bool() {
-                val += delta as i16;
+                val = val.wrapping_add(delta as i16);
             } else {
                 val.swap_bytes();
-                val += delta as i16;
+                val = val.wrapping_add(delta as i16);
                 val.swap_bytes();
             }
             mangle_overwrite(case, off, &val.to_ne_bytes(), app)
@@ -586,21 +587,21 @@ fn mangle_add_sub_with_range(
         4 => {
             let mut val = i32::from_ne_bytes(case.input.data[off..off + 4].try_into().unwrap());
             if case.rand.random_bool() {
-                val += delta as i32;
+                val = val.wrapping_add(delta as i32);
             } else {
                 val.swap_bytes();
-                val += delta as i32;
+                val = val.wrapping_add(delta as i32);
                 val.swap_bytes();
             }
             mangle_overwrite(case, off, &val.to_ne_bytes(), app)
         }
         8 => {
-            let mut val = i64::from_ne_bytes(case.input.data[off..off + 4].try_into().unwrap());
+            let mut val = i64::from_ne_bytes(case.input.data[off..off + 8].try_into().unwrap());
             if case.rand.random_bool() {
-                val += delta as i64;
+                val = val.wrapping_add(delta as i64);
             } else {
                 val.swap_bytes();
-                val += delta as i64;
+                val = val.wrapping_add(delta as i64);
                 val.swap_bytes();
             }
             mangle_overwrite(case, off, &val.to_ne_bytes(), app)
@@ -633,7 +634,7 @@ fn mangle_inc_byte(case: &mut FuzzCase, app: &App) {
     if app.config.app_config.random_ascii {
         case.input.data[off] = (case.input.data[off] - 32 + 1) % 95 + 32;
     } else {
-        case.input.data[off] += 1;
+        case.input.data[off] = case.input.data[off].wrapping_add(1);
     }
 }
 
@@ -642,7 +643,7 @@ fn mangle_dec_bytes(case: &mut FuzzCase, app: &App) {
     if app.config.app_config.random_ascii {
         case.input.data[off] = (case.input.data[off] - 32 + 94) % 95 + 32;
     } else {
-        case.input.data[off] -= 1;
+        case.input.data[off] = case.input.data[off].wrapping_sub(1);
     }
 }
 
@@ -719,37 +720,35 @@ fn mangle_ascii_num_change(case: &mut FuzzCase, app: &App) {
         return;
     }
 
-    let mut len = 0;
     let mut val: usize = 0;
-
-    for i in 0..left.min(20) {
+    for i in 0..left.min(19) {
         let c = case.input.data[off + i];
         if !c.is_ascii_digit() {
             break;
         }
         val *= 10;
         val += c as usize - '0' as usize;
-        len += 1;
     }
 
-    match case.rand.random_in(0..8) {
-        0 => val += 1,
-        1 => val -= 1,
-        2 => val *= 2,
-        3 => val /= 2,
-        4 => val = case.rand.next() as usize,
-        5 => val += case.rand.random_in(1..256) as usize,
-        6 => val -= case.rand.random_in(1..256) as usize,
-        7 => val = !val,
+    val = match case.rand.random_in(0..7) {
+        0 => val.wrapping_add(1),
+        1 => val.wrapping_sub(1),
+        2 => val * 2,
+        3 => val / 2,
+        4 => case.rand.next() as usize,
+        5 => val.wrapping_add(case.rand.random_in(1..256) as usize),
+        6 => val.wrapping_sub(case.rand.random_in(1..256) as usize),
+        7 => !val,
         _ => unimplemented!(),
-    }
+    };
 
     let data = format!("{}", val);
     mangle_use_value_at(case, off, data.as_bytes(), app)
 }
 
 fn mangle_splice(case: &mut FuzzCase, app: &App) {
-    let data = input::get_random_input(app);
+    let data = app.get_random_bytes();
+
     if data.len() == 0 {
         mangle_bytes(case, app);
         return;
@@ -828,7 +827,6 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
     }
 
     if case.input.data.len() == 0 {
-        println!("resize");
         mangle_resize(case, app);
     }
 
@@ -852,8 +850,8 @@ pub fn mangle_content(case: &mut FuzzCase, speed_factor: isize, app: &App) {
 
     for x in 0..change_count {
         let choice = case.rand.random_in(0..(mangle_funcs.len() - 1) as u64) as usize;
-        println!("Mangle in {}: {} bytes", choice, case.input.data.len());
-        let choice = 6;
+        //println!("Mangle in {}: {} bytes", choice, case.input.data.len());
+
         mangle_funcs[choice](case, app);
     }
 }
