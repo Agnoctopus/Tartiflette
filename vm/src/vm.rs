@@ -28,6 +28,41 @@ pub enum VmError {
     Kvm(kvm_ioctls::Error),
 }
 
+/// Additional details behind a PageFault exception
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct PageFaultDetail {
+    /// Page fault status code (from the exception frame)
+    pub status: u32,
+    /// Address of the access which caused the fault
+    pub address: u64,
+    /// RIP value of the instruction which caused the fault
+    pub rip: u64,
+    /// RSP value at the time of the fault
+    pub rsp: u64,
+}
+
+impl PageFaultDetail {
+    /// Returns true if the faulty access was made to unmapped memory.
+    pub fn unmapped(&self) -> bool {
+        self.status & 0x1 == 0
+    }
+
+    /// Returns true if the faulty access was a read.
+    pub fn read(&self) -> bool {
+        self.status & 0x2 == 0
+    }
+
+    /// Returns true if the faulty access was a write.
+    pub fn write(&self) -> bool {
+        !self.read()
+    }
+
+    /// Returns true if the faulty access was an instruction fetch.
+    pub fn instruction_fetch(&self) -> bool {
+        self.status & 0x10 == 1
+    }
+}
+
 /// Vm exit reason showed by tartiflette
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmExit {
@@ -43,6 +78,8 @@ pub enum VmExit {
     Exit,
     /// CPU Exception
     Exception(u8),
+    /// Page fault
+    PageFault(PageFaultDetail),
 }
 
 impl From<kvm_ioctls::Error> for VmError {
@@ -475,20 +512,6 @@ impl Vm {
             }
         }
 
-        /*
-           let mut pa = 0;
-           for (a,b)in (other.memory.pmem.raw_slice(0, other.memory.pmem.size()).unwrap().iter().zip(
-           self.memory.pmem.raw_slice(0, other.memory.pmem.size()).unwrap())) {
-           if a != b {
-           println!("address: {:x}: {} - {}", pa, a, b);
-
-                    }
-                    pa += 1;
-
-                }
-        println!("Value: {:x}", self.memory.pmem.read_val::<u8>(0x5265).unwrap());
- */
-
         for &addr in self.suspension_points.keys() {
             // Write the breakpoint
             self.memory.write(addr, &mut [0xcc])?;
@@ -548,7 +571,16 @@ impl Vm {
                     let exception_type = ExceptionType::from(exception_code);
 
                     match exception_type {
-                        ExceptionType::PageFault => println!("Page fault !"),
+                        ExceptionType::PageFault => {
+                            let sregs = self.cpu.get_sregs()?;
+
+                            break VmExit::PageFault(PageFaultDetail {
+                                status: exception_frame.error_code as u32,
+                                address: sregs.cr2,
+                                rip: exception_frame.rip,
+                                rsp: exception_frame.rsp,
+                            });
+                        }
                         _ => println!("Unhandled exception"),
                     }
 
