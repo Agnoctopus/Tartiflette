@@ -1,7 +1,17 @@
 import argparse
 import cmd
 import json
+import functools
 from pathlib import Path
+
+
+def cli_command(func):
+    @functools.wraps(func)
+    def wrap(self, arg):
+        args = list(filter(lambda a: len(a) > 0, map(str.strip, arg.split(" "))))
+        return func(self, args)
+
+    return wrap
 
 
 class Mapping:
@@ -92,24 +102,44 @@ class SnapshotCLI(cmd.Cmd):
             else:
                 print("")
 
-    def do_info(self, arg):
-        """ Prints all information about the snapshot """
+    def __snapshot_info(self):
+        """ Displays information about the snapshot """
         print(f"Snapshot info   : {self.snapshot.info_path}")
         print(f"Snapshot memory : {self.snapshot.memory_path}")
-        print("")
 
-        self.__register_state()
-        self.__memory_mappings()
+    @cli_command
+    def do_info(self, args):
+        """
+        Prints all information about the snapshot
 
-    def do_exit(self, arg):
+        info           Prints everything
+        info snapshot  Prints information about the snapshot
+        info registers Prints the status of the registers
+        info mappings  Prints the memory mappings
+        """
+        # args = split_args(arg)
+
+        if "snapshot" in args or len(args) == 0:
+            self.__snapshot_info()
+
+        if "registers" in args or len(args) == 0:
+            self.__register_state()
+
+        if "mappings" in args or len(args) == 0:
+            self.__memory_mappings()
+
+    @cli_command
+    def do_exit(self, args):
         """ Closes the shell """
         return True
 
-    def do_quit(self, arg):
+    @cli_command
+    def do_quit(self, args):
         """ Closes the shell """
         return True
 
-    def do_EOF(self, arg):
+    @cli_command
+    def do_EOF(self, args):
         return True
 
 
