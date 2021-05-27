@@ -43,23 +43,27 @@ pub struct PageFaultDetail {
 
 impl PageFaultDetail {
     /// Returns true if the faulty access was made to unmapped memory.
+    #[inline]
     pub fn unmapped(&self) -> bool {
-        self.status & 0x1 == 0
+        self.status.is_bit_set(0)
     }
 
     /// Returns true if the faulty access was a read.
+    #[inline]
     pub fn read(&self) -> bool {
-        self.status & 0x2 == 0
+        self.status.is_bit_set(1)
     }
 
     /// Returns true if the faulty access was a write.
+    #[inline]
     pub fn write(&self) -> bool {
         !self.read()
     }
 
     /// Returns true if the faulty access was an instruction fetch.
+    #[inline]
     pub fn instruction_fetch(&self) -> bool {
-        self.status & 0x10 == 1
+        self.status.is_bit_set(15)
     }
 }
 
