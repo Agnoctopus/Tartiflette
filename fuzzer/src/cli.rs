@@ -20,16 +20,23 @@ impl CLI {
             .arg(
                 Arg::with_name("corpus")
                     .long("corpus")
-                    .required(true)
                     .takes_value(true)
+                    .default_value("./corpus")
                     .help("Path to a directory containing corpus"),
             )
             .arg(
                 Arg::with_name("obj")
                     .long("obj")
-                    .required(true)
                     .takes_value(true)
+                    .default_value("./obj")
                     .help("Path to a directory containing obj"),
+            )
+            .arg(
+                Arg::with_name("crash")
+                    .long("crash")
+                    .takes_value(true)
+                    .default_value("./crashes")
+                    .help("Path to a directory containing crashes"),
             );
 
         // Match the program args

@@ -22,6 +22,8 @@ pub struct IOConfig {
     pub corpus_dir: String,
     /// Obj directory
     pub obj_dir: String,
+    /// Obj directory
+    pub crash_dir: String,
 }
 
 impl IOConfig {
@@ -37,6 +39,13 @@ impl IOConfig {
         let obj_dir = Path::new(&self.obj_dir);
         if !obj_dir.exists() {
             if let Err(error) = fs::create_dir(obj_dir) {
+                return Err(format!("{}", error));
+            }
+        }
+
+        let crash_dir = Path::new(&self.crash_dir);
+        if !crash_dir.exists() {
+            if let Err(error) = fs::create_dir(crash_dir) {
                 return Err(format!("{}", error));
             }
         }
@@ -56,10 +65,15 @@ impl TryFrom<&ArgMatches<'_>> for IOConfig {
             .value_of("obj")
             .map(String::from)
             .ok_or(ConfigError::Required("obj".to_string()))?;
+        let crash_dir = matches
+            .value_of("crash")
+            .map(String::from)
+            .ok_or(ConfigError::Required("crash".to_string()))?;
 
         Ok(Self {
             corpus_dir: corpus_dir,
             obj_dir: obj_dir,
+            crash_dir: crash_dir,
         })
     }
 }
