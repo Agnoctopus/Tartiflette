@@ -9,4 +9,5 @@ edition = "2018"
 
 [dependencies]
 tartiflette-vm = { path = "../vm2"}
+clap = "2.33.3"
 libafl = "0.3.2"
