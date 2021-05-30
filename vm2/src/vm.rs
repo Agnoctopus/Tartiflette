@@ -7,8 +7,6 @@ type Result<T> = std::result::Result<T, VmError>;
 
 /// Vm manipulation error
 pub enum VmError {
-    /// Guest has no available memory left
-    OutOfMemory,
     /// Error during a memory access
     MemoryError(MemoryError),
     /// Hypervisor error
@@ -91,7 +89,7 @@ impl Vm {
     /// Sets up a minimal vm (kvm init + memory + sregs)
     fn setup_barebones(memory_size: usize) -> Result<Vm> {
         // 1 - Allocate the memory
-        let vm_memory = VirtualMemory::new(memory_size).map_err(|_| VmError::OutOfMemory)?;
+        let vm_memory = VirtualMemory::new(memory_size)?;
 
         // 2 - Create the Kvm handles and setup guest memory
         // TODO: Properly convert errors (or just return an opaque VmError:Kvm(...)
@@ -360,5 +358,16 @@ impl Vm {
     /// Reads data from the given vm memory.
     pub fn read(&self, vaddr: u64, data: &mut [u8]) -> Result<()> {
         self.memory.read(vaddr, data).map_err(VmError::MemoryError)
+    }
+
+    /// Returns a copy of the current vm
+    pub fn clone(&self) -> Result<Vm> {
+        let mut new_vm = Vm::setup_barebones(self.memory.host_memory_size())?;
+
+        new_vm.registers = self.registers.clone();
+        new_vm.special_registers = self.special_registers.clone();
+        new_vm.memory = self.memory.clone()?;
+
+        Ok(new_vm)
     }
 }
