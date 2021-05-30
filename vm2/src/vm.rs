@@ -1,11 +1,14 @@
 use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_MEM_LOG_DIRTY_PAGES, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP};
-use kvm_ioctls::{Kvm, VmFd, VcpuFd};
+use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
+use nix::errno::Errno;
+use crate::bits::BitField;
 use crate::memory::{VirtualMemory, MemoryError, PagePermissions, PAGE_SIZE};
-use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntryBuilder};
+use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntryBuilder, ExceptionFrame, ExceptionType};
 
 type Result<T> = std::result::Result<T, VmError>;
 
 /// Vm manipulation error
+#[derive(Debug)]
 pub enum VmError {
     /// Error during a memory access
     MemoryError(MemoryError),
@@ -41,6 +44,41 @@ pub enum Register {
     Rflags
 }
 
+/// Additional details behind a PageFault exception
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct PageFaultDetail {
+    /// Page fault status code (from the exception frame)
+    pub status: u32,
+    /// Address of the access which caused the fault
+    pub address: u64,
+}
+
+impl PageFaultDetail {
+    /// Returns true if the faulty access was made to unmapped memory.
+    #[inline]
+    pub fn unmapped(&self) -> bool {
+        self.status.is_bit_set(0)
+    }
+
+    /// Returns true if the faulty access was a read.
+    #[inline]
+    pub fn read(&self) -> bool {
+        self.status.is_bit_set(1)
+    }
+
+    /// Returns true if the faulty access was a write.
+    #[inline]
+    pub fn write(&self) -> bool {
+        !self.read()
+    }
+
+    /// Returns true if the faulty access was an instruction fetch.
+    #[inline]
+    pub fn instruction_fetch(&self) -> bool {
+        self.status.is_bit_set(15)
+    }
+}
+
 /// Vm exit reason
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmExit {
@@ -50,8 +88,12 @@ pub enum VmExit {
     Breakpoint,
     /// Vm received was interrupted by the hypervisor
     Interrupted,
+    /// Page fault
+    PageFault(PageFaultDetail),
+    /// Unhandled exception #N
+    Exception(u64),
     /// Vm exit unhandled by tartiflette
-    Unhandled(u64)
+    Unhandled
 }
 
 /// Tartiflette vm state
@@ -92,7 +134,6 @@ impl Vm {
         let vm_memory = VirtualMemory::new(memory_size)?;
 
         // 2 - Create the Kvm handles and setup guest memory
-        // TODO: Properly convert errors (or just return an opaque VmError:Kvm(...)
         let kvm_fd = Kvm::new().map_err(|_| VmError::HvError("Could not open kvm device"))?;
         let vm_fd = kvm_fd.create_vm().map_err(|_| VmError::HvError("Could not create vm fd"))?;
         let vcpu_fd = vm_fd.create_vcpu(0).map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
@@ -369,5 +410,101 @@ impl Vm {
         new_vm.memory = self.memory.clone()?;
 
         Ok(new_vm)
+    }
+
+    /// Commit local copy of registers to kvm
+    fn commit_registers(&mut self) -> Result<()> {
+        // The second bit of rflags must always be set.
+        self.registers.rflags |= 1 << 1;
+        self.kvm_vcpu.set_regs(&self.registers)
+            .map_err(|_| VmError::HvError("Could not commit registers"))?;
+        self.kvm_vcpu.set_sregs(&self.special_registers)
+            .map_err(|_| VmError::HvError("Could not commit special registers"))?;
+
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> Result<VmExit> {
+        let result = loop {
+            self.commit_registers()?;
+
+            let exit = self.kvm_vcpu.run();
+
+            self.registers = self.kvm_vcpu.get_regs()
+                .map_err(|_| VmError::HvError("Could not get registers"))?;
+            self.special_registers = self.kvm_vcpu.get_sregs()
+                .map_err(|_| VmError::HvError("Could not get special registers"))?;
+
+            if let Err(err) = exit {
+                match Errno::from_i32(err.errno()) {
+                    Errno::EINTR | Errno::EAGAIN => break VmExit::Interrupted,
+                    _ => return Err(VmError::HvError("Unexpected errno in KVM_RUN"))
+                }
+            }
+
+
+            match exit.unwrap() {
+                VcpuExit::Debug => {
+                    break VmExit::Breakpoint
+                }
+                VcpuExit::Hlt => {
+                    // TODO: Handling hlt outside of hypercall context
+                    let exception_code: u64 = self.memory.read_val(self.registers.rsp)?;
+                    let exception_frame: ExceptionFrame = self.memory.read_val(self.registers.rsp + 8)?;
+
+                    // Reset register context to before exception
+                    self.registers.rsp = exception_frame.rsp;
+                    self.registers.rip = exception_frame.rip;
+
+                    match ExceptionType::from(exception_code) {
+                        ExceptionType::PageFault => {
+                            break VmExit::PageFault(PageFaultDetail {
+                                status: exception_frame.error_code as u32,
+                                address: self.special_registers.cr2
+                            });
+                        },
+                        _ => break VmExit::Exception(exception_code)
+                    }
+                }
+                _ => break VmExit::Unhandled
+            }
+        };
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Result, Vm, VmExit, Register};
+    use crate::memory::{PagePermissions, PAGE_SIZE};
+
+    #[test]
+    /// Runs a simple piece of code until completion
+    fn test_simple_exec() -> Result<()> {
+        let mut vm = Vm::new(512 * PAGE_SIZE)?;
+
+        // Simple shellcode
+        let shellcode: &[u8] = &[
+            0x48, 0x01, 0xc2, // add rdx, rax
+            0xcc // breakpoint
+        ];
+
+        vm.mmap(0x1337000, PAGE_SIZE, PagePermissions::EXECUTE)?;
+        vm.write(0x1337000, shellcode)?;
+
+        // Set registers to known values
+        vm.set_reg(Register::Rax, 0x1000);
+        vm.set_reg(Register::Rdx, 0x337);
+
+        // Execute from beginning of shellcode
+        vm.set_reg(Register::Rip, 0x1337000);
+
+        let vmexit = vm.run()?;
+
+        assert_eq!(vmexit, VmExit::Breakpoint);
+        assert_eq!(vm.get_reg(Register::Rip), 0x1337003);
+
+        Ok(())
     }
 }

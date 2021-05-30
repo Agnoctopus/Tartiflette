@@ -210,7 +210,7 @@ impl VirtualMemory {
 
     /// Returns the host starting address for guest memory
     pub fn host_address(&self) -> u64 {
-        self.pmem.guest_address() as u64
+        self.pmem.host_address() as u64
     }
 
     /// Returns the host allocated size for guest memory
