@@ -42,12 +42,6 @@ impl PhysicalMemory {
         })
     }
 
-    /// Return the guest physical region start address
-    #[inline]
-    pub fn guest_address(&self) -> usize {
-        0
-    }
-
     /// Return the host region start address
     #[inline]
     pub fn host_address(&self) -> usize {
@@ -58,12 +52,6 @@ impl PhysicalMemory {
     #[inline]
     pub fn size(&self) -> usize {
         self.size
-    }
-
-    /// Returns the amount of memory used inside the region
-    #[inline]
-    pub fn used(&self) -> usize {
-        self.top
     }
 
     /// Returns a slice covering an asked area
@@ -82,38 +70,6 @@ impl PhysicalMemory {
         }
 
         Ok(unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) })
-    }
-
-    /// Read a value from an address
-    #[inline]
-    pub fn read_val<T>(&self, pa: usize) -> Result<T> {
-        let read_size = core::mem::size_of::<T>();
-
-        if pa + read_size > self.size {
-            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, read_size));
-        }
-
-        let val = unsafe {
-            let val_ptr = self.raw_data.offset(pa as isize) as *const T;
-            val_ptr.read()
-        };
-        Ok(val)
-    }
-
-    /// Write a value to an address
-    #[inline]
-    pub fn write_val<T>(&self, pa: usize, val: T) -> Result<()> {
-        let write_size = core::mem::size_of::<T>();
-
-        if pa + write_size > self.size {
-            return Err(MemoryError::PhysWriteOutOfBounds(pa as u64, write_size));
-        }
-
-        unsafe {
-            let val_ptr = self.raw_data.offset(pa as isize) as *mut T;
-            val_ptr.write(val);
-        };
-        Ok(())
     }
 
     /// Read bytes from an address
