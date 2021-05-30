@@ -217,6 +217,110 @@ impl VirtualMemory {
     pub fn host_memory_size(&self) -> usize {
         self.pmem.size()
     }
+
+    /// Returns an iterator over all mappings
+    pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
+        MappingIterator::new(&self)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+/// Memory mapping inside the VirtualMemory
+pub struct Mapping {
+    /// Address of the mapping
+    pub address: u64,
+    /// Size of the page (here hardcoded to 4k)
+    pub size: usize,
+    /// Is mapping dirty
+    pub dirty: bool
+}
+
+/// Iterator over all mappings inside VirtualMemory
+struct MappingIterator<'a> {
+    l4_index: usize,
+    l3_index: usize,
+    l2_index: usize,
+    l1_index: usize,
+    memory: &'a VirtualMemory
+}
+
+impl<'a> MappingIterator<'a> {
+    pub fn new(mem: &VirtualMemory) -> MappingIterator {
+        MappingIterator {
+            l4_index: 0,
+            l3_index: 0,
+            l2_index: 0,
+            l1_index: 0,
+            memory: mem
+        }
+    }
+}
+
+impl<'a> Iterator for MappingIterator<'a> {
+    type Item = Mapping;
+
+    fn next(&mut self) -> Option<Mapping> {
+        // TODO: Fix this ugly function somehow
+        let root = PageTable::from_addr(self.memory.pmem.translate(self.memory.page_directory));
+
+        for l4 in self.l4_index..512 {
+            let p3 = root.next_table(l4, &self.memory.pmem);
+
+            if p3.is_none() {
+                continue
+            }
+
+            let p3t = p3.unwrap();
+
+            for l3 in self.l3_index..512 {
+                let p2 = p3t.next_table(l3, &self.memory.pmem);
+
+                if p2.is_none() {
+                    continue
+                }
+
+                let p2t = p2.unwrap();
+
+                for l2 in self.l2_index..512 {
+                    let p1 = p2t.next_table(l2, &self.memory.pmem);
+
+                    if p1.is_none() {
+                        continue
+                    }
+
+                    let p1t = p1.unwrap();
+
+                    for l1 in self.l1_index..512 {
+                        if p1t.entries[l1].present() {
+                            // Skip to next entry otherwise we will infinitely loop
+                            self.l1_index += 1;
+
+                            let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
+
+                            return Some(Mapping {
+                                address: vaddr.address(),
+                                size: PAGE_SIZE,
+                                dirty: p1t.entries[l1].dirty()
+                            });
+                        }
+
+                        self.l1_index += 1;
+                    }
+
+                    self.l1_index = 0;
+                    self.l2_index += 1;
+                }
+
+                self.l2_index = 0;
+                self.l3_index += 1;
+            }
+
+            self.l3_index = 0;
+            self.l4_index += 1;
+        }
+
+        None
+    }
 }
 
 #[cfg(test)]

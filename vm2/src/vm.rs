@@ -2,7 +2,7 @@ use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region
 use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
 use nix::errno::Errno;
 use crate::bits::BitField;
-use crate::memory::{VirtualMemory, MemoryError, PagePermissions, PAGE_SIZE};
+use crate::memory::{VirtualMemory, MemoryError, PagePermissions, Mapping, PAGE_SIZE};
 use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntryBuilder, ExceptionFrame, ExceptionType};
 
 type Result<T> = std::result::Result<T, VmError>;
@@ -412,6 +412,16 @@ impl Vm {
         Ok(new_vm)
     }
 
+    /// Returns an iterator over all mappings
+    pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
+        self.memory.mappings()
+    }
+
+    /// Returns an iterator over all dirty mappings
+    pub fn dirty_mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
+        self.mappings().filter(|m| m.dirty)
+    }
+
     /// Commit local copy of registers to kvm
     fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
@@ -490,6 +500,7 @@ mod tests {
             0xcc // breakpoint
         ];
 
+        // Mapping the code
         vm.mmap(0x1337000, PAGE_SIZE, PagePermissions::EXECUTE)?;
         vm.write(0x1337000, shellcode)?;
 
@@ -504,6 +515,43 @@ mod tests {
 
         assert_eq!(vmexit, VmExit::Breakpoint);
         assert_eq!(vm.get_reg(Register::Rip), 0x1337003);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Tests the collection of dirty pages
+    fn test_dirty_collection() -> Result<()> {
+        let mut vm = Vm::new(512 * PAGE_SIZE)?;
+
+        // Simple shellcode
+        let shellcode: &[u8] = &[
+            0x48, 0x89, 0x10, // mov [rax], rdx
+            0xcc // int3
+        ];
+
+        // Mapping the code
+        vm.mmap(0x1337000, PAGE_SIZE, PagePermissions::EXECUTE)?;
+        vm.write(0x1337000, shellcode)?;
+
+        // Mapping the target page of the write
+        vm.mmap(0xdeadb000, PAGE_SIZE, PagePermissions::READ | PagePermissions::WRITE)?;
+
+        // Set registers to known values
+        vm.set_reg(Register::Rax, 0xdeadbeef);
+        vm.set_reg(Register::Rdx, 0x42424242);
+
+        // Execute from beginning of shellcode
+        vm.set_reg(Register::Rip, 0x1337000);
+
+        let vmexit = vm.run()?;
+
+        // Sanity check
+        assert_eq!(vmexit, VmExit::Breakpoint);
+        assert_eq!(vm.get_reg(Register::Rip), 0x1337003);
+
+        // Check that the target page was dirtied
+        assert!(vm.dirty_mappings().any(|m| m.address == 0xdeadb000));
 
         Ok(())
     }
