@@ -10,7 +10,7 @@ use std::cmp::min;
 #[derive(Debug)]
 pub struct VirtualMemory {
     /// Physical memory of the VM
-    pub pmem: PhysicalMemory,
+    pmem: PhysicalMemory,
     /// Current page_directory
     page_directory: usize,
 }
@@ -98,7 +98,7 @@ impl VirtualMemory {
 
     /// Returns the physical address of a page if it exists
     #[inline]
-    pub fn pa(&self, addr: u64) -> Option<u64> {
+    fn pa(&self, addr: u64) -> Option<u64> {
         self.get_page_pa(VirtAddr::new(addr)).map(|x| x as u64)
     }
 
@@ -206,6 +206,16 @@ impl VirtualMemory {
             pmem: pmem,
             page_directory: self.page_directory,
         })
+    }
+
+    /// Returns the host starting address for guest memory
+    pub fn host_address(&self) -> u64 {
+        self.pmem.guest_address() as u64
+    }
+
+    /// Returns the host allocated size for guest memory
+    pub fn host_memory_size(&self) -> usize {
+        self.pmem.size()
     }
 }
 
