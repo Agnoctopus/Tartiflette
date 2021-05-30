@@ -1,4 +1,4 @@
-use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_MEM_LOG_DIRTY_PAGES, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP};
+use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP};
 use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
 use nix::errno::Errno;
 use crate::bits::BitField;
@@ -144,7 +144,7 @@ impl Vm {
                 guest_phys_addr: 0,
                 memory_size: vm_memory.host_memory_size() as u64,
                 userspace_addr: vm_memory.host_address(),
-                flags: KVM_MEM_LOG_DIRTY_PAGES
+                flags: 0
             }).map_err(|_| VmError::HvError("Could not set memory region for guest"))?
         }
 
