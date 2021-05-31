@@ -422,6 +422,13 @@ impl Vm {
         self.mappings().filter(|m| m.dirty)
     }
 
+    /// Clear dirty mappings status
+    pub fn clear_dirty_mappings(&mut self) {
+        for (_, pte) in self.memory.raw_pages_mut() {
+            pte.set_dirty(false);
+        }
+    }
+
     /// Commit local copy of registers to kvm
     fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
@@ -520,8 +527,8 @@ mod tests {
     }
 
     #[test]
-    /// Tests the collection of dirty pages
-    fn test_dirty_collection() -> Result<()> {
+    /// Tests the collection and clearing of dirty pages
+    fn test_dirty_status() -> Result<()> {
         let mut vm = Vm::new(512 * PAGE_SIZE)?;
 
         // Simple shellcode
@@ -552,6 +559,12 @@ mod tests {
 
         // Check that the target page was dirtied
         assert!(vm.dirty_mappings().any(|m| m.address == 0xdeadb000));
+
+        // Reset the pages dirty status
+        vm.clear_dirty_mappings();
+
+        // Check again the dirty pages
+        assert!(vm.dirty_mappings().count() == 0);
 
         Ok(())
     }

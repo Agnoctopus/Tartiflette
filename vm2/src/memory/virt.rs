@@ -1,6 +1,6 @@
 //! Virtual Memory Subsystem
 
-use super::paging::{FrameAllocator, PagePermissions, PageTable, VirtAddr, VirtRange};
+use super::paging::{FrameAllocator, PagePermissions, PageTable, PageTableEntry, VirtAddr, VirtRange};
 use super::phys::PhysicalMemory;
 use super::{MemoryError, Result, PAGE_SIZE};
 
@@ -220,7 +220,23 @@ impl VirtualMemory {
 
     /// Returns an iterator over all mappings
     pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
-        MappingIterator::new(&self)
+        PageIterator::new(&self).map(|(addr, page)| {
+            Mapping {
+                address: addr,
+                size: PAGE_SIZE,
+                dirty: page.dirty()
+            }
+        })
+    }
+
+    /// Returns a raw Iterator over present PageTableEntries
+    pub(crate) fn raw_pages(&self) -> impl Iterator<Item=(u64, &PageTableEntry)> {
+        PageIterator::new(&self)
+    }
+
+    /// Returns a raw mutable Iterator over present PageTableEntries
+    pub(crate) fn raw_pages_mut(&mut self) -> impl Iterator<Item=(u64, &mut PageTableEntry)> + '_ {
+        PageIteratorMut::new(self)
     }
 }
 
@@ -235,8 +251,8 @@ pub struct Mapping {
     pub dirty: bool
 }
 
-/// Iterator over all mappings inside VirtualMemory
-struct MappingIterator<'a> {
+/// Iterator over all page table entries inside VirtualMemory (immutable)
+struct PageIterator<'a> {
     l4_index: usize,
     l3_index: usize,
     l2_index: usize,
@@ -244,9 +260,9 @@ struct MappingIterator<'a> {
     memory: &'a VirtualMemory
 }
 
-impl<'a> MappingIterator<'a> {
-    pub fn new(mem: &VirtualMemory) -> MappingIterator {
-        MappingIterator {
+impl<'a> PageIterator<'a> {
+    pub fn new(mem: &VirtualMemory) -> PageIterator {
+        PageIterator {
             l4_index: 0,
             l3_index: 0,
             l2_index: 0,
@@ -256,65 +272,95 @@ impl<'a> MappingIterator<'a> {
     }
 }
 
-impl<'a> Iterator for MappingIterator<'a> {
-    type Item = Mapping;
+impl <'a> Iterator for PageIterator<'a> {
+    type Item = (u64, &'a PageTableEntry);
 
-    fn next(&mut self) -> Option<Mapping> {
-        // TODO: Fix this ugly function somehow
-        let root = PageTable::from_addr(self.memory.pmem.translate(self.memory.page_directory));
+    fn next(&mut self) -> Option<Self::Item> {
+        // TODO: Please find a cleaner way of doing this
+        let p4 = PageTable::from_addr(self.memory.pmem.translate(self.memory.page_directory));
 
         for l4 in self.l4_index..512 {
-            let p3 = root.next_table(l4, &self.memory.pmem);
+            if let Some(p3) = p4.next_table(l4, &self.memory.pmem) {
+                for l3 in self.l3_index..512 {
+                    if let Some(p2) = p3.next_table(l3, &self.memory.pmem) {
+                        for l2 in self.l2_index..512 {
+                            if let Some(p1) = p2.next_table(l2, &self.memory.pmem) {
+                                for l1 in self.l1_index..512 {
+                                    self.l1_index += 1;
 
-            if p3.is_none() {
-                continue
-            }
-
-            let p3t = p3.unwrap();
-
-            for l3 in self.l3_index..512 {
-                let p2 = p3t.next_table(l3, &self.memory.pmem);
-
-                if p2.is_none() {
-                    continue
-                }
-
-                let p2t = p2.unwrap();
-
-                for l2 in self.l2_index..512 {
-                    let p1 = p2t.next_table(l2, &self.memory.pmem);
-
-                    if p1.is_none() {
-                        continue
-                    }
-
-                    let p1t = p1.unwrap();
-
-                    for l1 in self.l1_index..512 {
-                        if p1t.entries[l1].present() {
-                            // Skip to next entry otherwise we will infinitely loop
-                            self.l1_index += 1;
-
-                            let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
-
-                            return Some(Mapping {
-                                address: vaddr.address(),
-                                size: PAGE_SIZE,
-                                dirty: p1t.entries[l1].dirty()
-                            });
+                                    if p1.entries[l1].present() {
+                                        let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
+                                        return Some((vaddr.address(), &p1.entries[l1]))
+                                    }
+                                }
+                            }
+                            self.l1_index = 0;
+                            self.l2_index += 1;
                         }
-
-                        self.l1_index += 1;
                     }
-
-                    self.l1_index = 0;
-                    self.l2_index += 1;
+                    self.l2_index = 0;
+                    self.l3_index += 1;
                 }
-
-                self.l2_index = 0;
-                self.l3_index += 1;
             }
+            self.l3_index = 0;
+            self.l4_index += 1;
+        }
 
+        None
+    }
+}
+
+/// Mutable version
+struct PageIteratorMut<'a> {
+    l4_index: usize,
+    l3_index: usize,
+    l2_index: usize,
+    l1_index: usize,
+    memory: &'a mut VirtualMemory
+}
+
+impl<'a> PageIteratorMut<'a> {
+    pub fn new(mem: &mut VirtualMemory) -> PageIteratorMut {
+        PageIteratorMut {
+            l4_index: 0,
+            l3_index: 0,
+            l2_index: 0,
+            l1_index: 0,
+            memory: mem
+        }
+    }
+}
+
+impl <'a> Iterator for PageIteratorMut<'a> {
+    type Item = (u64, &'a mut PageTableEntry);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // TODO: Please find a cleaner way of doing this
+        let p4 = PageTable::from_addr(self.memory.pmem.translate(self.memory.page_directory));
+
+        for l4 in self.l4_index..512 {
+            if let Some(p3) = p4.next_table(l4, &self.memory.pmem) {
+                for l3 in self.l3_index..512 {
+                    if let Some(p2) = p3.next_table(l3, &self.memory.pmem) {
+                        for l2 in self.l2_index..512 {
+                            if let Some(p1) = p2.next_table(l2, &self.memory.pmem) {
+                                for l1 in self.l1_index..512 {
+                                    self.l1_index += 1;
+
+                                    if p1.entries[l1].present() {
+                                        let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
+                                        return Some((vaddr.address(), &mut p1.entries[l1]))
+                                    }
+                                }
+                            }
+                            self.l1_index = 0;
+                            self.l2_index += 1;
+                        }
+                    }
+                    self.l2_index = 0;
+                    self.l3_index += 1;
+                }
+            }
             self.l3_index = 0;
             self.l4_index += 1;
         }

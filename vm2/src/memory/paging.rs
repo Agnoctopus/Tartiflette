@@ -323,6 +323,12 @@ impl PageTableEntry {
         self.0.is_bit_set(Self::DIRTY_BIT)
     }
 
+    /// Sets whether the page is dirty or not
+    #[inline]
+    pub fn set_dirty(&mut self, status: bool) {
+        self.0.set_bit(Self::DIRTY_BIT, status);
+    }
+
     /// Whether or not the page is huge
     #[inline]
     pub fn huge_page(&self) -> bool {
