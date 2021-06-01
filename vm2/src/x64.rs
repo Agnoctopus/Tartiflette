@@ -203,7 +203,6 @@ impl TssEntry {
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 pub struct ExceptionFrame {
-    pub error_code: u64,
     pub rip: u64,
     pub cs: u64,
     pub rflags: u64,

@@ -82,17 +82,21 @@ impl PageFaultDetail {
 /// Vm exit reason
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmExit {
-    /// Stopped on a halt instruction
+    /// Vm stopped on a halt instruction
     Hlt,
-    /// Stopped on a breakpoint instruction or singlestep
+    /// Vm stopped on a breakpoint instruction or singlestep
     Breakpoint,
-    /// Vm received was interrupted by the hypervisor
+    /// Vm interrupted by the hypervisor
     Interrupted,
-    /// Page fault
+    /// Vm stopped on an invalid instruction
+    InvalidInstruction,
+    /// Vm stopped on a page fault
     PageFault(PageFaultDetail),
-    /// Unhandled exception #N
+    /// Vm stopped on an unhandled exception
     Exception(u64),
-    /// Vm exit unhandled by tartiflette
+    /// Vm stopped on a syscall instruction
+    Syscall,
+    /// Vmexit unhandled by tartiflette
     Unhandled
 }
 
@@ -207,7 +211,8 @@ impl Vm {
         self.special_registers.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
         // Physical address extension (necessary for x64)
         self.special_registers.cr4 = CR4_PAE | CR4_OSXSAVE;
-        // Sets x64 mode enabled (LME), active (LMA), and executable disable bit support (NXE)
+        // Sets x64 mode enabled (LME), active (LMA), executable disable bit support (NXE), syscall
+        // support (SCE)
         self.special_registers.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
         // Sets the page table root address
         self.special_registers.cr3 = self.memory.page_directory() as u64;
@@ -467,7 +472,25 @@ impl Vm {
                 VcpuExit::Hlt => {
                     // TODO: Handling hlt outside of hypercall context
                     let exception_code: u64 = self.memory.read_val(self.registers.rsp)?;
-                    let exception_frame: ExceptionFrame = self.memory.read_val(self.registers.rsp + 8)?;
+
+                    let error_code: Option<u64> = match ExceptionType::from(exception_code) {
+                        ExceptionType::DoubleFault |
+                        ExceptionType::InvalidTSS  |
+                        ExceptionType::SegmentNotPresent |
+                        ExceptionType::StackFault |
+                        ExceptionType::GeneralProtection |
+                        ExceptionType::PageFault |
+                        ExceptionType::AlignmentCheck |
+                        ExceptionType::ControlProtection
+                        => Some(self.memory.read_val(self.registers.rsp + 8)?),
+                        _ => None
+                    };
+
+                    let exception_frame: ExceptionFrame = if error_code.is_some() {
+                        self.memory.read_val(self.registers.rsp + 16)?
+                    } else {
+                        self.memory.read_val(self.registers.rsp + 8)?
+                    };
 
                     // Reset register context to before exception
                     self.registers.rsp = exception_frame.rsp;
@@ -476,10 +499,32 @@ impl Vm {
                     match ExceptionType::from(exception_code) {
                         ExceptionType::PageFault => {
                             break VmExit::PageFault(PageFaultDetail {
-                                status: exception_frame.error_code as u32,
+                                status: error_code.unwrap() as u32,
                                 address: self.special_registers.cr2
                             });
                         },
+                        ExceptionType::InvalidOpcode => {
+                            // As IA32_EFER.SCE is not enabled, a syscall instruction will trigger
+                            // a #UD exception. We cannot enable the SCE bit in EFER as it would
+                            // require us to setup the whole syscall machinery as well as the LSTAR
+                            // register.
+                            // To give the opportunity to the Vm user to emulate the syscall, we try
+                            // to detect the instruction bytes, set the rip to after the syscall
+                            // and return with a special `Syscall` VmExit.
+                            let mut code_bytes: [u8; 2] = [0; 2];
+
+                            if self.memory.read(self.registers.rip, &mut code_bytes).is_ok() {
+                                //  0f 05 -> syscall
+                                if code_bytes == [0x0f, 0x05] {
+                                    // We advance rip by two bytes to move over the syscall
+                                    // instruction.
+                                    self.registers.rip += 2;
+                                    break VmExit::Syscall;
+                                }
+                            }
+
+                            break VmExit::InvalidInstruction;
+                        }
                         _ => break VmExit::Exception(exception_code)
                     }
                 }
@@ -504,7 +549,7 @@ mod tests {
         // Simple shellcode
         let shellcode: &[u8] = &[
             0x48, 0x01, 0xc2, // add rdx, rax
-            0xcc // breakpoint
+            0xcc, // breakpoint
         ];
 
         // Mapping the code
@@ -565,6 +610,44 @@ mod tests {
 
         // Check again the dirty pages
         assert!(vm.dirty_mappings().count() == 0);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Runs a simple piece of code until completion
+    fn test_simple_syscall() -> Result<()> {
+        let mut vm = Vm::new(512 * PAGE_SIZE)?;
+
+        // The syscall in the shellcode will add rax and rdx together
+        let shellcode: &[u8] = &[
+            0x0f, 0x05, // syscall
+            0xcc, // breakpoint
+        ];
+
+        // Mapping the code
+        vm.mmap(0x1337000, PAGE_SIZE, PagePermissions::EXECUTE)?;
+        vm.write(0x1337000, shellcode)?;
+
+        // Set registers to known values
+        vm.set_reg(Register::Rax, 0x1000);
+        vm.set_reg(Register::Rdx, 0x337);
+
+        // Execute from beginning of shellcode
+        vm.set_reg(Register::Rip, 0x1337000);
+
+        let vmexit = vm.run()?;
+
+        assert_eq!(vmexit, VmExit::Syscall);
+
+        // Emulated syscall doing rax = rax + rdx
+        vm.set_reg(Register::Rax, vm.get_reg(Register::Rax) + vm.get_reg(Register::Rdx));
+
+        let vmexit_end = vm.run()?;
+
+        assert_eq!(vmexit_end, VmExit::Breakpoint);
+        assert_eq!(vm.get_reg(Register::Rip), 0x1337002);
+        assert_eq!(vm.get_reg(Register::Rax), 0x1337);
 
         Ok(())
     }
