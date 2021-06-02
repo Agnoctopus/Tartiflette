@@ -1,4 +1,7 @@
 mod memory;
 mod bits;
 mod x64;
-pub mod vm;
+mod vm;
+
+pub use vm::{Vm, VmError, VmExit, Register};
+pub use memory::{Mapping, PagePermissions};
