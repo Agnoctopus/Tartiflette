@@ -89,18 +89,6 @@ impl VirtualMemory {
         p1.next_table_address(address.p1_index())
     }
 
-    /// Returns whether a given `VirtAddr` is mapped into the address space
-    #[inline]
-    pub fn is_mapped(&self, address: VirtAddr) -> bool {
-        self.get_page_pa(address).is_some()
-    }
-
-    /// Returns the physical address of a page if it exists
-    #[inline]
-    fn pa(&self, addr: u64) -> Option<u64> {
-        self.get_page_pa(VirtAddr::new(addr)).map(|x| x as u64)
-    }
-
     /// Reads data from the virtual address space
     pub fn read(&self, addr: u64, output: &mut [u8]) -> Result<()> {
         // Compute the range of pages between VA and VA + read_size
@@ -228,13 +216,8 @@ impl VirtualMemory {
         })
     }
 
-    /// Returns a raw Iterator over present PageTableEntries
-    pub(crate) fn raw_pages(&self) -> impl Iterator<Item=(u64, &PageTableEntry)> {
-        PageIterator::new(&self)
-    }
-
     /// Returns a raw mutable Iterator over present PageTableEntries
-    pub(crate) fn raw_pages_mut(&mut self) -> impl Iterator<Item=(u64, &mut PageTableEntry)> + '_ {
+    pub fn raw_pages_mut(&mut self) -> impl Iterator<Item=(u64, &mut PageTableEntry)> + '_ {
         PageIteratorMut::new(self)
     }
 }

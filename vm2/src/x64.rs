@@ -32,7 +32,6 @@ impl IdtEntry {
 #[repr(u8)]
 pub enum PrivilegeLevel {
     Ring0 = 0,
-    Ring3 = 3,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

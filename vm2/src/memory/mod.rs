@@ -6,16 +6,13 @@ mod paging;
 mod phys;
 mod virt;
 
-pub use paging::PagePermissions;
+pub use paging::{PagePermissions, PAGE_SIZE};
 pub use virt::{VirtualMemory, Mapping};
 
 use std::{error, fmt};
 
 /// Result type
 pub type Result<T> = std::result::Result<T, MemoryError>;
-
-/// Page size
-pub const PAGE_SIZE: usize = 0x1000;
 
 /// Error type on VM memory system
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

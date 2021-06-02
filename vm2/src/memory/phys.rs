@@ -63,14 +63,14 @@ impl PhysicalMemory {
         Ok(unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) })
     }
 
-    /// Returns a mutable slice covering an asked area
-    pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
-        if pa + length > self.size() {
-            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
-        }
+    ///// Returns a mutable slice covering a requested area
+    //pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
+    //    if pa + length > self.size() {
+    //        return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
+    //    }
 
-        Ok(unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) })
-    }
+    //    Ok(unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) })
+    //}
 
     /// Read bytes from an address
     #[inline]

@@ -106,14 +106,6 @@ pub struct PageTable {
 impl PageTable {
     /// Number of entries in a page table
     pub const NB_ENTRIES: usize = 512;
-    /// The memory size an level 4 page table entry can cover
-    pub const P4_ENTRY_COVER_SIZE: usize = 4096 * 512 * 512 * 512;
-    /// The memory size an level 3 page table entry can cover
-    pub const P3_ENTRY_COVER_SIZE: usize = 4096 * 512 * 512;
-    /// The memory size an level 2 page table entry can cover
-    pub const P2_ENTRY_COVER_SIZE: usize = 4096 * 512;
-    /// The memory size an level 1 page table entry can cover
-    pub const P1_ENTRY_COVER_SIZE: usize = 4096;
 
     /// Get the `PageTable` from an address, typically cr3 for the
     /// 4-level active page table.
@@ -191,17 +183,6 @@ impl PageTable {
             entry.set_unused();
         }
     }
-
-    /// Returnt the index of the first unused entry inside the table
-    #[inline]
-    pub fn first_unused_entry_index(&self) -> Option<usize> {
-        for (index, entry) in self.entries.iter().enumerate() {
-            if entry.unused() {
-                return Some(index);
-            }
-        }
-        None
-    }
 }
 
 /// Page Table entry
@@ -232,12 +213,6 @@ impl PageTableEntry {
     const ADDRESS_BITS: Range<usize> = 12..52;
     /// The underlying is executable
     const EXECUTION_DISABLE_BIT: usize = 63;
-
-    /// Create an instance of PageTableEntry
-    #[inline]
-    pub const fn new() -> Self {
-        PageTableEntry(0)
-    }
 
     /// Whether or not The entry is unused
     #[inline]
@@ -281,34 +256,16 @@ impl PageTableEntry {
         self.0.is_bit_set(Self::USER_ACCESSIBLE_BIT)
     }
 
-    /// Set whether or not the page is accessible by a user
-    #[inline]
-    pub fn set_user_accessible(&mut self, user_accessible: bool) {
-        self.0.set_bit(Self::USER_ACCESSIBLE_BIT, user_accessible);
-    }
-
     /// Whether or not the write go directly to memory on this page
     #[inline]
     pub fn write_caching(&self) -> bool {
         self.0.is_bit_set(Self::WRITE_CACHING_BIT)
     }
 
-    /// Set whether or not the write go directly to memory on this page
-    #[inline]
-    pub fn set_write_caching(&mut self, write_caching: bool) {
-        self.0.set_bit(Self::WRITE_CACHING_BIT, write_caching);
-    }
-
     /// Whether or not the cache is enable for this page
     #[inline]
     pub fn caching(&self) -> bool {
         !self.0.is_bit_set(Self::CACHE_DISABLE_BIT)
-    }
-
-    /// Set whether or not the cache is enable for this page
-    #[inline]
-    pub fn set_caching(&mut self, cache: bool) {
-        self.0.set_bit(Self::CACHE_DISABLE_BIT, !cache);
     }
 
     /// Whether or not the page was accessed by the CPU
@@ -335,24 +292,11 @@ impl PageTableEntry {
         self.0.is_bit_set(Self::HUGE_PAGE_BIT)
     }
 
-    /// Set whether or not the page is huge
-    #[inline]
-    pub fn set_huge_page(&mut self, huge_page: bool) {
-        self.0.set_bit(Self::HUGE_PAGE_BIT, huge_page);
-    }
-
     /// Whether or not the page is global (flush or not from caches on
     /// address space switch)
     #[inline]
     pub fn global(&self) -> bool {
         self.0.is_bit_set(Self::GLOBAL_BIT)
-    }
-
-    /// Set whether or not the page is global (flush or not from caches on
-    /// address space switch)
-    #[inline]
-    pub fn set_global(&mut self, global: bool) {
-        self.0.set_bit(Self::GLOBAL_BIT, global)
     }
 
     /// Returns the page aligned 52bit physical address of the frame or
@@ -379,24 +323,6 @@ impl PageTableEntry {
     #[inline]
     pub fn set_executable(&mut self, executable: bool) {
         self.0.set_bit(Self::EXECUTION_DISABLE_BIT, !executable)
-    }
-
-    /// Returns the flags
-    #[inline]
-    pub fn flags(&self) -> u64 {
-        self.0 ^ self.address()
-    }
-
-    /// Set the flags
-    #[inline]
-    pub fn set_flags(&mut self, flags: u64) {
-        self.0 |= flags;
-    }
-
-    /// Returns whether or not the entry has the specified flags
-    #[inline]
-    pub fn has_flags(&self, flags: u64) -> bool {
-        self.flags() & flags == flags
     }
 }
 
@@ -440,27 +366,6 @@ impl VirtRange {
             end: end,
         }
     }
-
-    /// Return the range start
-    #[inline]
-    pub fn start(&self) -> VirtAddr {
-        self.start
-    }
-
-    /// Return the inclusive range end
-    #[inline]
-    pub fn end(&self) -> VirtAddr {
-        self.end
-    }
-
-    /// Get the number of pages inside the range
-    #[inline]
-    pub fn number_of_pages(&self) -> usize {
-        match self.end > self.start {
-            true => ((self.end().address() - self.start().address()) / 0x1000) as usize,
-            false => 0,
-        }
-    }
 }
 
 impl Iterator for VirtRange {
@@ -490,8 +395,6 @@ impl VirtAddr {
     const P1_INDEX_BITS: Range<usize> = 12..21;
 
     const P1_OFFSET_BITS: Range<usize> = 0..12;
-    const P2_OFFSET_BITS: Range<usize> = 0..21;
-    const P3_OFFSET_BITS: Range<usize> = 0..30;
 
     /// Create a new `VirtAddr` instance, panic on not possible
     /// virtual address.
@@ -537,55 +440,11 @@ impl VirtAddr {
         Self::new(virt_addr as u64)
     }
 
-    /// Alias to forge ()
-    #[inline]
-    pub fn forge_p1(
-        p4_index: usize,
-        p3_index: usize,
-        p2_index: usize,
-        p1_index: usize,
-        p1_offset: usize,
-    ) -> Self {
-        Self::forge(p4_index, p3_index, p2_index, p1_index, p1_offset)
-    }
-
-    /// Forge a level-2 page table `VirtAddr`
-    #[inline]
-    pub fn forge_p2(p4_index: usize, p3_index: usize, p2_index: usize, p2_offset: usize) -> Self {
-        let mut virt_addr: usize = 0;
-
-        // Build the virtual address
-        virt_addr.set_bits(Self::P4_INDEX_BITS, p4_index);
-        virt_addr.set_bits(Self::P3_INDEX_BITS, p3_index);
-        virt_addr.set_bits(Self::P2_INDEX_BITS, p2_index);
-        virt_addr.set_bits(Self::P2_OFFSET_BITS, p2_offset);
-
-        Self::new(virt_addr as u64)
-    }
-
-    /// Forge a level-3 page table `VirtAddr`
-    #[inline]
-    pub fn forge_p3(p4_index: usize, p3_index: usize, p3_offset: usize) -> Self {
-        let mut virt_addr: usize = 0;
-
-        // Build the virtual address
-        virt_addr.set_bits(Self::P4_INDEX_BITS, p4_index);
-        virt_addr.set_bits(Self::P3_INDEX_BITS, p3_index);
-        virt_addr.set_bits(Self::P3_OFFSET_BITS, p3_offset);
-
-        Self::new(virt_addr as u64)
-    }
 
     /// Return the raw virtual address
     #[inline]
     pub fn address(&self) -> u64 {
         self.0
-    }
-
-    /// Return the page number of the virtual address
-    #[inline]
-    pub fn page_number(&self) -> usize {
-        self.0 as usize / 0x1000
     }
 
     /// Return whether or not the address is page aligned
@@ -622,32 +481,5 @@ impl VirtAddr {
     #[inline]
     pub fn p1_index(&self) -> usize {
         self.0.get_bits(Self::P1_INDEX_BITS) as usize
-    }
-
-    /// Get the offset on the 1-level page table associated entry pointed
-    /// physical frame.
-    #[inline]
-    pub fn offset(&self) -> usize {
-        self.0.get_bits(Self::P1_OFFSET_BITS) as usize
-    }
-
-    /// Alias to offset()
-    #[inline]
-    pub fn p1_offset(&self) -> usize {
-        self.offset()
-    }
-
-    /// Get the offset on the 2-level page table associated entry pointed
-    /// physical frame. Use on 2-level page table huge page entry.
-    #[inline]
-    pub fn p2_offset(&self) -> usize {
-        self.0.get_bits(Self::P2_OFFSET_BITS) as usize
-    }
-
-    /// Get the offset on the 3-level page table associated entry pointed
-    /// physical frame. Use on 3-level page table huge page entry.
-    #[inline]
-    pub fn p3_offset(&self) -> usize {
-        self.0.get_bits(Self::P3_OFFSET_BITS) as usize
     }
 }
