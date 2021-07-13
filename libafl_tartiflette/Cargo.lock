@@ -263,6 +263,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kvm-bindings"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e9742810f4cb95388955853c032cd50415d18834357f67b7b299fc28217cd3d"
+dependencies = [
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "kvm-ioctls"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b8002ac5e13e1f61da5b8c440fe4de5bae029b4538cd899ef2dd93e1245bf71"
+dependencies = [
+ "kvm-bindings",
+ "libc",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -306,6 +326,7 @@ name = "libafl-tartiflette"
 version = "0.5.0"
 dependencies = [
  "libafl",
+ "tartiflette-vm",
 ]
 
 [[package]]
@@ -658,6 +679,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tartiflette-vm"
+version = "0.1.0"
+dependencies = [
+ "kvm-bindings",
+ "kvm-ioctls",
+ "nix",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -753,6 +783,16 @@ name = "version_check"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
+
+[[package]]
+name = "vmm-sys-util"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1cdd1d72e262bbfb014de65ada24c1ac50e10a2e3b1e8ec052df188c2ee5dfa"
+dependencies = [
+ "bitflags",
+ "libc",
+]
 
 [[package]]
 name = "wasi"
