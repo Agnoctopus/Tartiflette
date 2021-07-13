@@ -397,7 +397,7 @@ impl Vm {
         self.memory.write(vaddr, data).map_err(VmError::MemoryError)
     }
 
-    pub fn read_value<T>(&mut self, address: u64, val: T) -> Result<()> {
+    pub fn write_value<T>(&mut self, address: u64, val: T) -> Result<()> {
         self.memory.write_val::<T>(address, val).map_err(VmError::MemoryError)
     }
 
