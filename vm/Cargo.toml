@@ -1,20 +1,15 @@
 [package]
-name = "tartiflette"
+name = "tartiflette-vm"
 version = "0.1.0"
 edition = "2018"
 authors = ["César Belley <cesar.belley@lse.epita.fr>",
            "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
 license = "GPL-2.0"
 repository = "https://github.com/MattGorko/Tartiflette"
-readme = "README.md"
-keywords = ["fuzzer", "fuzzing", "kvm", "virtualisation"]
-description= "Fuzz program inside KVM hypervisor binded with Honggfuzz"
+keywords = ["kvm", "emulation"]
+description= "Unicorn like wrappers around kvm"
 
 [dependencies]
 kvm-ioctls = "0.6.1"
 kvm-bindings = "0.3.1"
-clap = "2.33.3"
 nix = "0.20.0"
-memory = { path = "src/memory" }
-bits = { path = "src/bits" }
-snapshot = { path = "src/snapshot" }
