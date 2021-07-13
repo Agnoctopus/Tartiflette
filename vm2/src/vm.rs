@@ -8,7 +8,7 @@ use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntry
 type Result<T> = std::result::Result<T, VmError>;
 
 /// Vm manipulation error
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmError {
     /// Error during a memory access
     MemoryError(MemoryError),
@@ -23,6 +23,7 @@ impl From<MemoryError> for VmError {
 }
 
 /// List of available registers
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Register {
     Rax,
     Rbx,
