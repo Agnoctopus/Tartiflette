@@ -115,6 +115,11 @@ class DumpSnapshot(gdb.Command):
 
         for reg in arch_registers[arch]:
             reg_value = gdb_int_value(f"${reg}")
+
+            # Special case for eflags -> rflags
+            if reg == "eflags":
+                reg = "rflags"
+
             register_data[reg] = f"{reg_value:x}"
         return register_data
 
