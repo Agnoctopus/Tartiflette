@@ -1,0 +1,10 @@
+[package]
+name = "fuzzer-libmicrodns"
+version = "0.5.0"
+authors = ["César Belley <cesar.belley@lse.epita.fr>",
+           "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
+edition = "2018"
+
+[dependencies]
+tartiflette-vm = { path = "../../vm" }
+libafl = "0.5.0"
