@@ -1,4 +1,9 @@
-use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP};
+use std::path::Path;
+use std::fs;
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Read};
+use serde::{de::Error, Deserialize};
+use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, Msrs, kvm_msr_entry};
 use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
 use nix::errno::Errno;
 use crate::bits::BitField;
@@ -8,10 +13,12 @@ use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntry
 type Result<T> = std::result::Result<T, VmError>;
 
 /// Vm manipulation error
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VmError {
     /// Error during a memory access
     MemoryError(MemoryError),
+    /// Error during snapshot loading
+    SnapshotError(String),
     /// Hypervisor error
     HvError(&'static str)
 }
@@ -19,6 +26,12 @@ pub enum VmError {
 impl From<MemoryError> for VmError {
     fn from(err: MemoryError) -> VmError {
         VmError::MemoryError(err)
+    }
+}
+
+impl From<std::io::Error> for VmError {
+    fn from(err: std::io::Error) -> VmError {
+        VmError::SnapshotError(err.to_string())
     }
 }
 
@@ -42,7 +55,9 @@ pub enum Register {
     R14,
     R15,
     Rip,
-    Rflags
+    Rflags,
+    FsBase,
+    GsBase
 }
 
 /// Additional details behind a PageFault exception
@@ -80,6 +95,98 @@ impl PageFaultDetail {
     }
 }
 
+// Snapshot helpers
+fn parse_u64<'de, D>(d: D) -> std::result::Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>
+{
+    let s: &str = Deserialize::deserialize(d)?;
+    u64::from_str_radix(s, 16).map_err(D::Error::custom)
+}
+
+fn parse_perms<'de, D>(d: D) -> std::result::Result<PagePermissions, D::Error>
+where
+    D: serde::Deserializer<'de>
+{
+    let s: &str = Deserialize::deserialize(d)?;
+    let mut perms = PagePermissions::new(0);
+
+    // TODO: Proper checking instead of this hack
+    perms.set_readable(true); // No execute only in x64 iirc
+    perms.set_writable(s.contains('w'));
+    perms.set_executable(s.contains('x'));
+
+    Ok(perms)
+}
+
+#[derive(Deserialize)]
+struct SnapshotMapping {
+    /// Starting address
+    #[serde(deserialize_with = "parse_u64")]
+    pub start: u64,
+    /// Ending address (excluded)
+    #[serde(deserialize_with = "parse_u64")]
+    pub end: u64,
+    /// Offset in the binary dump
+    #[serde(deserialize_with = "parse_u64")]
+    pub physical_offset: u64,
+    /// Page permissions
+    #[serde(deserialize_with = "parse_perms")]
+    pub permissions: PagePermissions
+}
+
+#[derive(Deserialize)]
+struct SnapshotRegisters {
+    #[serde(deserialize_with = "parse_u64")]
+    pub rax: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rbx: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rcx: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rdx: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rsi: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rdi: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rsp: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rbp: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r8: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r9: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r10: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r11: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r12: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r13: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r14: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub r15: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rip: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub rflags: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub fs_base: u64,
+    #[serde(deserialize_with = "parse_u64")]
+    pub gs_base: u64
+}
+
+#[derive(Deserialize)]
+struct Snapshot {
+    /// Memory mappings in the snapshot
+    pub mappings: Vec<SnapshotMapping>,
+    /// Registers in the snapshot
+    pub registers: SnapshotRegisters
+}
+
 /// Vm exit reason
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VmExit {
@@ -113,9 +220,16 @@ pub struct Vm {
     registers: kvm_regs,
     /// Local copy of kvm special registers
     special_registers: kvm_sregs,
+    /// fs_base register
+    fs_base: u64,
+    /// gs_base register
+    gs_base: u64,
     /// VM Memory
     memory: VirtualMemory
 }
+
+const IA32_FS_BASE: u32 = 0xC0000100;
+const IA32_GS_BASE: u32 = 0xC0000101;
 
 impl Vm {
     /// Creates a vm with a given memory size (the size will be aligned to
@@ -162,7 +276,9 @@ impl Vm {
             kvm_vcpu: vcpu_fd,
             registers: Default::default(),
             special_registers: sregs,
-            memory: vm_memory
+            memory: vm_memory,
+            fs_base: 0,
+            gs_base: 0
         })
     }
 
@@ -341,6 +457,7 @@ impl Vm {
     }
 
     /// Gets a register from the vm state
+    #[inline]
     pub fn get_reg(&self, regid: Register) -> u64 {
         match regid {
             Register::Rax => self.registers.rax,
@@ -360,11 +477,14 @@ impl Vm {
             Register::R14 => self.registers.r14,
             Register::R15 => self.registers.r15,
             Register::Rip => self.registers.rip,
-            Register::Rflags => self.registers.rflags
+            Register::Rflags => self.registers.rflags,
+            Register::FsBase => self.fs_base,
+            Register::GsBase => self.gs_base
         }
     }
 
     /// Sets a register in the vm state
+    #[inline]
     pub fn set_reg(&mut self, regid: Register, regval: u64) {
         match regid {
             Register::Rax => self.registers.rax = regval,
@@ -384,7 +504,9 @@ impl Vm {
             Register::R14 => self.registers.r14 = regval,
             Register::R15 => self.registers.r15 = regval,
             Register::Rip => self.registers.rip = regval,
-            Register::Rflags => self.registers.rflags = regval
+            Register::Rflags => self.registers.rflags = regval,
+            Register::FsBase => self.fs_base = regval,
+            Register::GsBase => self.gs_base = regval
         }
     }
 
@@ -444,6 +566,23 @@ impl Vm {
         self.kvm_vcpu.set_sregs(&self.special_registers)
             .map_err(|_| VmError::HvError("Could not commit special registers"))?;
 
+        // gs_base and fs_base need to go through msrs
+        let msrs = Msrs::from_entries(&[
+            kvm_msr_entry {
+                index: IA32_FS_BASE,
+                data: self.fs_base,
+                ..Default::default()
+            },
+            kvm_msr_entry {
+                index: IA32_GS_BASE,
+                data: self.gs_base,
+                ..Default::default()
+            },
+        ]);
+
+        self.kvm_vcpu.set_msrs(&msrs)
+            .map_err(|_| VmError::HvError("Could not commit fsbase and gsbase"))?;
+
         Ok(())
     }
 
@@ -453,18 +592,40 @@ impl Vm {
 
             let exit = self.kvm_vcpu.run();
 
+            // Synchronize normal registers
             self.registers = self.kvm_vcpu.get_regs()
                 .map_err(|_| VmError::HvError("Could not get registers"))?;
             self.special_registers = self.kvm_vcpu.get_sregs()
                 .map_err(|_| VmError::HvError("Could not get special registers"))?;
 
+            // Synchronize fs_base and gs_base
+            let mut msrs = Msrs::from_entries(&[
+                kvm_msr_entry {
+                    index: IA32_FS_BASE,
+                    ..Default::default()
+                },
+                kvm_msr_entry {
+                    index: IA32_GS_BASE,
+                    ..Default::default()
+                },
+            ]);
+
+            let count = self.kvm_vcpu.get_msrs(&mut msrs)
+                .map_err(|_| VmError::HvError("Could not read fs_base and gs_base"))?;
+
+            assert_eq!(count, 2, "Invalid number of msrs returned");
+
+            let msrs_res = msrs.as_slice();
+            self.fs_base = msrs_res[0].data;
+            self.gs_base = msrs_res[1].data;
+
+            // Handle possible interrupts (timeout)
             if let Err(err) = exit {
                 match Errno::from_i32(err.errno()) {
                     Errno::EINTR | Errno::EAGAIN => break VmExit::Interrupted,
                     _ => return Err(VmError::HvError("Unexpected errno in KVM_RUN"))
                 }
             }
-
 
             match exit.unwrap() {
                 VcpuExit::Debug => {
@@ -534,6 +695,58 @@ impl Vm {
         };
 
         Ok(result)
+    }
+
+    /// Loads a vm state from snapshot files
+    pub fn from_snapshot<T: AsRef<Path>>(snapshot_info: T, memory_dump: T, memory_size: usize) -> Result<Vm> {
+        let mut vm = Vm::new(memory_size)?;
+
+        // Loading snapshot information
+        let info_content = fs::read_to_string(snapshot_info)?;
+        let info: Snapshot = serde_json::from_str(info_content.as_str())
+            .map_err(|e| VmError::SnapshotError(e.to_string()))?;
+
+        // Loading the mappings
+        let mut dump = File::open(memory_dump)?;
+
+        for mapping in info.mappings {
+            assert!(mapping.start < mapping.end, "mapping.start > mapping.end");
+
+            let mapping_size = (mapping.end - mapping.start) as usize;
+            let mut buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+            vm.mmap(mapping.start, mapping_size, mapping.permissions)?;
+
+            // TODO: Implement more efficient copy to memory
+            for off in (0..mapping_size).step_by(PAGE_SIZE) {
+                dump.seek(SeekFrom::Start(mapping.physical_offset + off as u64))?;
+                dump.read(&mut buf)?;
+                vm.write(mapping.start + off as u64, &buf)?;
+            }
+        }
+
+        // Load the registers
+        vm.set_reg(Register::Rax, info.registers.rax);
+        vm.set_reg(Register::Rbx, info.registers.rbx);
+        vm.set_reg(Register::Rcx, info.registers.rcx);
+        vm.set_reg(Register::Rdx, info.registers.rdx);
+        vm.set_reg(Register::Rsi, info.registers.rsi);
+        vm.set_reg(Register::Rdi, info.registers.rdi);
+        vm.set_reg(Register::Rsp, info.registers.rsp);
+        vm.set_reg(Register::Rbp, info.registers.rbp);
+        vm.set_reg(Register::R8, info.registers.r8);
+        vm.set_reg(Register::R9, info.registers.r9);
+        vm.set_reg(Register::R10, info.registers.r10);
+        vm.set_reg(Register::R11, info.registers.r11);
+        vm.set_reg(Register::R12, info.registers.r12);
+        vm.set_reg(Register::R13, info.registers.r13);
+        vm.set_reg(Register::R14, info.registers.r14);
+        vm.set_reg(Register::R15, info.registers.r15);
+        vm.set_reg(Register::Rip, info.registers.rip);
+        vm.set_reg(Register::Rflags, info.registers.rflags);
+        vm.set_reg(Register::FsBase, info.registers.fs_base);
+        vm.set_reg(Register::GsBase, info.registers.gs_base);
+
+        Ok(vm)
     }
 }
 

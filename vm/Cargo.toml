@@ -13,3 +13,5 @@ description= "Unicorn like wrappers around kvm"
 kvm-ioctls = "0.6.1"
 kvm-bindings = "0.3.1"
 nix = "0.20.0"
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
