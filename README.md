@@ -1,7 +1,7 @@
 Tartiflette
 ===========
 
-An attempt at snapshot fuzzing using KVM and libafl.
+An attempt at snapshot fuzzing using KVM and libAFL.
 
 # Architecture
 
