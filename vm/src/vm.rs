@@ -708,12 +708,12 @@ impl Vm {
 
         // Loading the mappings
         let mut dump = File::open(memory_dump)?;
+        let mut buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
         for mapping in info.mappings {
             assert!(mapping.start < mapping.end, "mapping.start > mapping.end");
 
             let mapping_size = (mapping.end - mapping.start) as usize;
-            let mut buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
             vm.mmap(mapping.start, mapping_size, mapping.permissions)?;
 
             // TODO: Implement more efficient copy to memory
@@ -747,6 +747,56 @@ impl Vm {
         vm.set_reg(Register::GsBase, info.registers.gs_base);
 
         Ok(vm)
+    }
+
+    pub fn reset(&mut self, other: &Vm) {
+        // Reset registers
+        self.registers = other.registers;
+        self.special_registers = other.special_registers;
+        self.fs_base = other.fs_base;
+        self.gs_base = other.gs_base;
+
+        // Reset memory state
+        // Here we prefer aborting as if you are resetting a vm with a completely different one you
+        // are doing something extremely wrong.
+        assert_eq!(self.memory.host_memory_size(), other.memory.host_memory_size(), "Vm memory mismatch");
+        let mut page_buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+
+        // FIXME: Find how to iterate over dirty mappings without allocation or making the borrow
+        // checker angry.
+        let mappings: Vec<Mapping> = self.dirty_mappings().collect();
+
+        for mapping in mappings {
+            let start = mapping.address;
+            let end = start + mapping.size as u64;
+
+            // TODO: Implement a more efficient copy solution
+            for addr in (start..end).step_by(PAGE_SIZE) {
+                other.read(addr, &mut page_buf).expect("Invalid read during reset");
+                self.write(addr, &page_buf).expect("Invalid write during reset");
+            }
+        }
+
+        self.clear_dirty_mappings();
+    }
+}
+
+impl Clone for Vm {
+    fn clone(&self) -> Self {
+        let mut vm = Vm::new(self.memory.host_memory_size())
+            .expect("Could not create vm for clone");
+
+        // Copy registers
+        vm.registers = self.registers;
+        vm.special_registers = self.special_registers;
+        vm.fs_base = self.fs_base;
+        vm.gs_base = self.gs_base;
+
+        // Copy memory
+        vm.memory = self.memory.clone()
+            .expect("Could not clone virtual memory");
+
+        vm
     }
 }
 

@@ -735,6 +735,8 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "nix",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
