@@ -145,3 +145,20 @@ where
         Ok(exit_kind)
     }
 }
+
+impl<'a, H, I, OT, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, OT, S>
+where
+    H: FnMut(&mut Vm, &I) -> ExitKind,
+    I: Input,
+    OT: ObserversTuple<I, S>
+{
+    #[inline]
+    fn observers(&self) -> &OT {
+        &self.observers
+    }
+
+    #[inline]
+    fn observers_mut(&mut self) -> &mut OT {
+        &mut self.observers
+    }
+}
