@@ -1,14 +1,12 @@
 Tartiflette
 ===========
 
-A complete fuzzing environement based on KVM virtualization.
+An attempt at snapshot fuzzing using KVM and libafl.
 
 # Architecture
 
-Three crates:
-- vm: Library of fuzzing tools in virtualization
-- fuzzer: LibAFL fuzzer using vm
-- fuzzer_maison: Hand made fuzzer using vm
+- vm: Unicorn like api over KVM
+- fuzzers/libmicrodns: Sample harness for fuzzing libmicrodns using tartiflette-vm
 
 # Authors
 
