@@ -1,12 +1,20 @@
 use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Not;
 use libafl::{
     executors::{Executor, ExitKind, HasObservers},
-    observers::ObserversTuple,
+    observers::{ObserversTuple, StdMapObserver, MapObserver},
     inputs::Input,
     Error
 };
 use tartiflette_vm::{Vm, VmExit, Register};
+
+/// Error during executor actions
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutorError {
+    /// Error during interaction with the vm
+    VmError(&'static str)
+}
 
 /// Mode of execution after a hook was fired
 pub enum HookResult {
@@ -58,7 +66,11 @@ where
         _state: &mut S,
         _mgr: &mut EM,
         input: &I,
-    ) -> Result<ExitKind, Error> {
+    ) -> std::result::Result<ExitKind, Error> {
+        // Load the map we will modify with coverage
+        let map_observer = self.observers
+            .match_name_mut::<StdMapObserver<u8>>("map")
+            .expect("TartifletteExecutor expects a StdMapObserver<u8> named 'map'");
 
         // Place the input in memory
         (self.harness_fn)(&mut self.exec_vm, &input);
@@ -108,6 +120,10 @@ where
                         // Remove the breakpoint from the coverage
                         self.coverage.remove(&rip);
                         self.orig_bytes.remove(&rip);
+
+                        // Add the coverage to the map
+                        let map = map_observer.map_mut();
+                        map[(rip as usize) % map.len()] += 1;
                     }
 
                     // Handle hooks
@@ -146,6 +162,58 @@ where
     }
 }
 
+impl<'a, H, I, OT, S> TartifletteExecutor<'a, H, I, OT, S>
+where
+    H: FnMut(&mut Vm, &I) -> ExitKind,
+    I: Input,
+    OT: ObserversTuple<I, S>
+{
+    pub fn add_coverage(&mut self, address: u64) -> Result<(), ExecutorError> {
+        // Check that the spot is not already instrumented
+        if self.hooks.contains_key(&address) {
+            return Err(ExecutorError::VmError("Hook already installed at this address"));
+        }
+
+        if self.coverage.contains(&address).not() {
+            // Read original byte from memory
+            let mut orig_byte: [u8; 1] = [0; 1];
+            self.exec_vm.read(address, &mut orig_byte)
+                .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
+
+            // Write breakpoint to memory
+            self.exec_vm.write_value(address, 0xcc).unwrap();
+
+            self.coverage.insert(address);
+            self.orig_bytes.insert(address, orig_byte[0]);
+
+        }
+
+        Ok(())
+    }
+
+    pub fn add_hook(&mut self, address: u64, hook: &'a mut TartifletteHook) -> Result<(), ExecutorError> {
+        // Check that the spot is not already instrumented
+        if self.coverage.contains(&address) {
+            return Err(ExecutorError::VmError("Coverage already installed at this address"));
+        }
+
+        let mut orig_byte: [u8; 1] = [0; 1];
+
+        // Read original byte
+        self.exec_vm.read(address, &mut orig_byte)
+            .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
+
+        if self.hooks.insert(address, hook).is_none() {
+            // Write breakpoint to memory. Should not fail as orig byte was read from same address
+            self.exec_vm.write_value(address, 0xcc).unwrap();
+            // New hook, add the original byte
+            self.orig_bytes.insert(address, orig_byte[0]);
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a, H, I, OT, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
@@ -160,5 +228,25 @@ where
     #[inline]
     fn observers_mut(&mut self) -> &mut OT {
         &mut self.observers
+    }
+}
+
+impl<'a, H, I, OT, S> TartifletteExecutor<'a, H, I, OT, S>
+where
+    H: FnMut(&mut Vm, &I) -> ExitKind,
+    I: Input,
+    OT: ObserversTuple<I, S>
+{
+    pub fn new(vm: &Vm, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
+        Ok(TartifletteExecutor {
+            harness_fn: harness,
+            observers,
+            exec_vm: vm.clone(),
+            reset_vm: vm.clone(),
+            hooks: Default::default(),
+            coverage: Default::default(),
+            orig_bytes: Default::default(),
+            phantom: PhantomData::<(I, S)>
+        })
     }
 }
