@@ -529,17 +529,6 @@ impl Vm {
         self.memory.read(vaddr, data).map_err(VmError::MemoryError)
     }
 
-    /// Returns a copy of the current vm
-    pub fn clone(&self) -> Result<Vm> {
-        let mut new_vm = Vm::setup_barebones(self.memory.host_memory_size())?;
-
-        new_vm.registers = self.registers.clone();
-        new_vm.special_registers = self.special_registers.clone();
-        new_vm.memory = self.memory.clone()?;
-
-        Ok(new_vm)
-    }
-
     /// Returns an iterator over all mappings
     pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
         self.memory.mappings()

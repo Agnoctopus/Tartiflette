@@ -20,7 +20,7 @@ pub enum HookResult {
     Exit
 }
 
-pub type TartifletteHook = FnMut(&mut Vm) -> HookResult;
+pub type TartifletteHook = dyn FnMut(&mut Vm) -> HookResult;
 
 pub struct TartifletteExecutor<'a, H, I, OT, S>
 where
