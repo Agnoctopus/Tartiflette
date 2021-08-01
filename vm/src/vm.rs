@@ -1,14 +1,13 @@
 use std::path::Path;
-use std::fs;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Read};
-use serde::{de::Error, Deserialize};
 use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, Msrs, kvm_msr_entry};
 use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
 use nix::errno::Errno;
 use crate::bits::BitField;
 use crate::memory::{VirtualMemory, MemoryError, PagePermissions, Mapping, PAGE_SIZE};
 use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntryBuilder, ExceptionFrame, ExceptionType};
+use crate::snapshot::{SnapshotInfo, SnapshotError};
 
 type Result<T> = std::result::Result<T, VmError>;
 
@@ -18,7 +17,7 @@ pub enum VmError {
     /// Error during a memory access
     MemoryError(MemoryError),
     /// Error during snapshot loading
-    SnapshotError(String),
+    SnapshotError(SnapshotError),
     /// Hypervisor error
     HvError(&'static str)
 }
@@ -31,7 +30,13 @@ impl From<MemoryError> for VmError {
 
 impl From<std::io::Error> for VmError {
     fn from(err: std::io::Error) -> VmError {
-        VmError::SnapshotError(err.to_string())
+        VmError::SnapshotError(SnapshotError::IoError(err.to_string()))
+    }
+}
+
+impl From<SnapshotError> for VmError {
+    fn from(err: SnapshotError) -> VmError {
+        VmError::SnapshotError(err)
     }
 }
 
@@ -93,98 +98,6 @@ impl PageFaultDetail {
     pub fn instruction_fetch(&self) -> bool {
         self.status.is_bit_set(15)
     }
-}
-
-// Snapshot helpers
-fn parse_u64<'de, D>(d: D) -> std::result::Result<u64, D::Error>
-where
-    D: serde::Deserializer<'de>
-{
-    let s: &str = Deserialize::deserialize(d)?;
-    u64::from_str_radix(s, 16).map_err(D::Error::custom)
-}
-
-fn parse_perms<'de, D>(d: D) -> std::result::Result<PagePermissions, D::Error>
-where
-    D: serde::Deserializer<'de>
-{
-    let s: &str = Deserialize::deserialize(d)?;
-    let mut perms = PagePermissions::new(0);
-
-    // TODO: Proper checking instead of this hack
-    perms.set_readable(true); // No execute only in x64 iirc
-    perms.set_writable(s.contains('w'));
-    perms.set_executable(s.contains('x'));
-
-    Ok(perms)
-}
-
-#[derive(Deserialize)]
-struct SnapshotMapping {
-    /// Starting address
-    #[serde(deserialize_with = "parse_u64")]
-    pub start: u64,
-    /// Ending address (excluded)
-    #[serde(deserialize_with = "parse_u64")]
-    pub end: u64,
-    /// Offset in the binary dump
-    #[serde(deserialize_with = "parse_u64")]
-    pub physical_offset: u64,
-    /// Page permissions
-    #[serde(deserialize_with = "parse_perms")]
-    pub permissions: PagePermissions
-}
-
-#[derive(Deserialize)]
-struct SnapshotRegisters {
-    #[serde(deserialize_with = "parse_u64")]
-    pub rax: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rbx: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rcx: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rdx: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rsi: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rdi: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rsp: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rbp: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r8: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r9: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r10: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r11: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r12: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r13: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r14: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub r15: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rip: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub rflags: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub fs_base: u64,
-    #[serde(deserialize_with = "parse_u64")]
-    pub gs_base: u64
-}
-
-#[derive(Deserialize)]
-struct Snapshot {
-    /// Memory mappings in the snapshot
-    pub mappings: Vec<SnapshotMapping>,
-    /// Registers in the snapshot
-    pub registers: SnapshotRegisters
 }
 
 /// Vm exit reason
@@ -690,10 +603,7 @@ impl Vm {
     pub fn from_snapshot<T: AsRef<Path>>(snapshot_info: T, memory_dump: T, memory_size: usize) -> Result<Vm> {
         let mut vm = Vm::new(memory_size)?;
 
-        // Loading snapshot information
-        let info_content = fs::read_to_string(snapshot_info)?;
-        let info: Snapshot = serde_json::from_str(info_content.as_str())
-            .map_err(|e| VmError::SnapshotError(e.to_string()))?;
+        let info = SnapshotInfo::from_file(snapshot_info)?;
 
         // Loading the mappings
         let mut dump = File::open(memory_dump)?;

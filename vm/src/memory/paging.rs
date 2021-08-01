@@ -19,7 +19,7 @@ pub trait FrameAllocator {
 }
 
 /// Page permissions
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct PagePermissions(usize);
 
 impl PagePermissions {

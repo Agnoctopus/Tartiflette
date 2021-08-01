@@ -142,7 +142,7 @@ where
                                 self.exec_vm.write_value(rip, orig_byte)
                                     .expect("Error while restoring hook byte");
 
-                                // Active trap flag and fill the singlestep slot
+                                // Activate trap flag and fill the singlestep slot
                                 let rflags = self.exec_vm.get_reg(Register::Rflags);
                                 self.exec_vm.set_reg(Register::Rflags, rflags | (1 << 8));
                                 singlestep = Some(rip);
