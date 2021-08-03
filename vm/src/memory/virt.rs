@@ -10,7 +10,7 @@ use std::cmp::min;
 #[derive(Debug)]
 pub struct VirtualMemory {
     /// Physical memory of the VM
-    pmem: PhysicalMemory,
+    pub(crate) pmem: PhysicalMemory,
     /// Current page_directory
     page_directory: usize,
 }

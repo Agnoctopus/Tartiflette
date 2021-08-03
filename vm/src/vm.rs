@@ -692,8 +692,10 @@ impl Clone for Vm {
         vm.gs_base = self.gs_base;
 
         // Copy memory
-        vm.memory = self.memory.clone()
-            .expect("Could not clone virtual memory");
+        let orig_mem = self.memory.pmem.raw_slice(0, self.memory.host_memory_size())
+            .expect("Could not get original physical memory");
+        vm.memory.pmem.write(0, &orig_mem)
+            .expect("Could not set actual memory to original");
 
         vm
     }
