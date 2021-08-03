@@ -69,8 +69,8 @@ where
     ) -> std::result::Result<ExitKind, Error> {
         // Load the map we will modify with coverage
         let map_observer = self.observers
-            .match_name_mut::<StdMapObserver<u8>>("map")
-            .expect("TartifletteExecutor expects a StdMapObserver<u8> named 'map'");
+            .match_name_mut::<StdMapObserver<u8>>("coverage")
+            .expect("TartifletteExecutor expects a StdMapObserver<u8> named 'coverage'");
 
         // Place the input in memory
         (self.harness_fn)(&mut self.exec_vm, &input);
@@ -83,7 +83,6 @@ where
         let exit_kind = loop {
             let vmexit = self.exec_vm.run()
                 .expect("Unexpected vm error");
-
             let rip = self.exec_vm.get_reg(Register::Rip);
 
             match vmexit {
@@ -114,7 +113,7 @@ where
 
                         // Normally it is impossible for the memory access to fail
                         // as we breakpointed on the instruction at rip.
-                        self.exec_vm.write_value(rip, orig_byte)
+                        self.exec_vm.write_value::<u8>(rip, *orig_byte)
                             .expect("Error while removing exec_vm coverage");
 
                         // Remove the breakpoint from the coverage
@@ -139,7 +138,7 @@ where
 
                                 // This write should never fail as we breakpointed
                                 // on this address.
-                                self.exec_vm.write_value(rip, orig_byte)
+                                self.exec_vm.write_value::<u8>(rip, *orig_byte)
                                     .expect("Error while restoring hook byte");
 
                                 // Activate trap flag and fill the singlestep slot
@@ -181,7 +180,7 @@ where
                 .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
 
             // Write breakpoint to memory
-            self.exec_vm.write_value(address, 0xcc).unwrap();
+            self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
 
             self.coverage.insert(address);
             self.orig_bytes.insert(address, orig_byte[0]);
@@ -205,7 +204,7 @@ where
 
         if self.hooks.insert(address, hook).is_none() {
             // Write breakpoint to memory. Should not fail as orig byte was read from same address
-            self.exec_vm.write_value(address, 0xcc).unwrap();
+            self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
             // New hook, add the original byte
             self.orig_bytes.insert(address, orig_byte[0]);
         }
