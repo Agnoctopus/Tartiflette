@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Read};
-use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, Msrs, kvm_msr_entry};
+use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES, Msrs, kvm_msr_entry};
 use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
 use nix::errno::Errno;
 use crate::bits::BitField;
@@ -176,7 +176,7 @@ impl Vm {
                 guest_phys_addr: 0,
                 memory_size: vm_memory.host_memory_size() as u64,
                 userspace_addr: vm_memory.host_address(),
-                flags: 0
+                flags: KVM_MEM_LOG_DIRTY_PAGES
             }).map_err(|_| VmError::HvError("Could not set memory region for guest"))?
         }
 
@@ -661,24 +661,22 @@ impl Vm {
         // Here we prefer aborting as if you are resetting a vm with a completely different one you
         // are doing something extremely wrong.
         assert_eq!(self.memory.host_memory_size(), other.memory.host_memory_size(), "Vm memory mismatch");
-        let mut page_buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
-        // FIXME: Find how to iterate over dirty mappings without allocation or making the borrow
-        // checker angry.
-        let mappings: Vec<Mapping> = self.dirty_mappings().collect();
+        let dirty_log = self.kvm_vm.get_dirty_log(0, self.memory.host_memory_size())
+            .expect("Could not get dirty log for current vm");
 
-        for mapping in mappings {
-            let start = mapping.address;
-            let end = start + mapping.size as u64;
+        for (bm_index, bm_entry) in dirty_log.iter().enumerate() {
+            for i in 0..64 {
+                let pa = (bm_index * 8 + i) * PAGE_SIZE;
 
-            // TODO: Implement a more efficient copy solution
-            for addr in (start..end).step_by(PAGE_SIZE) {
-                other.read(addr, &mut page_buf).expect("Invalid read during reset");
-                self.write(addr, &page_buf).expect("Invalid write during reset");
+                if (bm_entry >> i) & 1 == 1 {
+                    let orig_page = other.memory.pmem.raw_slice(pa, PAGE_SIZE)
+                        .expect("Could not read physical memory from source vm");
+                    self.memory.pmem.write(pa, &orig_page)
+                        .expect("Could not restore page in dirty vm");
+                }
             }
         }
-
-        self.clear_dirty_mappings();
     }
 }
 
