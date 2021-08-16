@@ -137,6 +137,8 @@ pub struct Vm {
     fs_base: u64,
     /// gs_base register
     gs_base: u64,
+    /// Starting address of the hypercall region
+    hypercall_page: u64,
     /// VM Memory
     memory: VirtualMemory
 }
@@ -190,6 +192,7 @@ impl Vm {
             registers: Default::default(),
             special_registers: sregs,
             memory: vm_memory,
+            hypercall_page: 0,
             fs_base: 0,
             gs_base: 0
         })
@@ -324,6 +327,8 @@ impl Vm {
             PAGE_SIZE,
             PagePermissions::READ | PagePermissions::EXECUTE
         )?;
+
+        self.hypercall_page = IDT_HANDLERS;
 
         for i in 0..32 {
             let handler_code: &[u8] = &[
@@ -536,7 +541,14 @@ impl Vm {
                     break VmExit::Breakpoint
                 }
                 VcpuExit::Hlt => {
-                    // TODO: Handling hlt outside of hypercall context
+                    // If code is outside of hypercall region, we forward the hlt
+                    if (self.registers.rip < self.hypercall_page)
+                        || (self.registers.rip >= self.hypercall_page + PAGE_SIZE as u64) {
+                            break VmExit::Hlt
+                    }
+
+                    // If we are within the hypercall region we handle the
+                    // exception forwarding.
                     let exception_code: u64 = self.memory.read_val(self.registers.rsp)?;
 
                     let error_code: Option<u64> = match ExceptionType::from(exception_code) {
@@ -670,9 +682,11 @@ impl Vm {
                 let pa = (bm_index * 8 + i) * PAGE_SIZE;
 
                 if (bm_entry >> i) & 1 == 1 {
-                    let orig_page = other.memory.pmem.raw_slice(pa, PAGE_SIZE)
+                    let mut data: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+
+                    other.memory.pmem.read(pa, &mut data)
                         .expect("Could not read physical memory from source vm");
-                    self.memory.pmem.write(pa, &orig_page)
+                    self.memory.pmem.write(pa, &data)
                         .expect("Could not restore page in dirty vm");
                 }
             }
