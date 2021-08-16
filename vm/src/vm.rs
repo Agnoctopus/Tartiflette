@@ -203,8 +203,10 @@ impl Vm {
         const CR0_ET: u64 = 1 << 4;
         const CR0_WP: u64 = 1 << 16;
 
+        // TODO: Check CPUID before setting the flags or get the crX regs from a snapshot
         const CR4_PAE: u64 = 1 << 5;
-        const CR4_OSXSAVE: u64 = 1 << 18; // TODO: Maybe check for support with cpuid
+        const CR4_OSXSAVE: u64 = 1 << 18;
+        const CR4_OSFXSR: u64 = 1 << 9;
         const IA32_EFER_LME: u64 = 1 << 8;
         const IA32_EFER_LMA: u64 = 1 << 10;
         const IA32_EFER_NXE: u64 = 1 << 11;
@@ -240,7 +242,7 @@ impl Vm {
         // Paging enable and paging
         self.special_registers.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
         // Physical address extension (necessary for x64)
-        self.special_registers.cr4 = CR4_PAE | CR4_OSXSAVE;
+        self.special_registers.cr4 = CR4_PAE | CR4_OSXSAVE | CR4_OSFXSR;
         // Sets x64 mode enabled (LME), active (LMA), executable disable bit support (NXE), syscall
         // support (SCE)
         self.special_registers.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
