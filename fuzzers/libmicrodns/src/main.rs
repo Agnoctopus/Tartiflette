@@ -40,12 +40,10 @@ fn main() {
         0x2090,
         0x20a0,
         0x20b0,
-        0x20c0,
         0x20d0,
         0x20e0,
         0x20f0,
         0x2100,
-        0x2110,
         0x2120,
         0x2130,
         0x2140,
@@ -73,7 +71,6 @@ fn main() {
         0x22a0,
         0x22b0,
         0x22c0,
-        0x22d0,
         0x22e0,
         0x22e8,
         0x22f0,
@@ -264,7 +261,6 @@ fn main() {
         0x3160,
         0x30f8,
         0x3150,
-        0x3190,
         0x31c8,
         0x3195,
         0x31a0,
@@ -779,7 +775,7 @@ fn main() {
         let alloc_size = vm.get_reg(Register::Rdi);
         let obj_ptr = unsafe { MALLOC_PTR };
 
-        println!("HOOK: malloc(size: 0x{:x}) -> 0x{:x}", alloc_size, obj_ptr);
+        // println!("HOOK: malloc(size: 0x{:x}) -> 0x{:x}", alloc_size, obj_ptr);
 
         if obj_ptr + alloc_size > MALLOC_AREA_END {
             panic!("Malloc area could not fulfill allocation");
@@ -805,10 +801,13 @@ fn main() {
         HookResult::Redirect
     };
 
-    let malloc_addr = snapshot_info.symbols.get("malloc")
-        .expect("Could not find malloc address");
+    // let malloc_addr = snapshot_info.symbols.get("malloc")
+    //     .expect("Could not find malloc address");
 
-    executor.add_hook(*malloc_addr, &mut malloc_hook)
+    // executor.add_hook(*malloc_addr, &mut malloc_hook)
+    //     .expect("Could not install malloc hook");
+
+    executor.add_hook(libmicrodns_module.start + 0x000020c0, &mut malloc_hook)
         .expect("Could not install malloc hook");
 
     // Free hook
@@ -825,15 +824,18 @@ fn main() {
         vm.set_reg(Register::Rip, u64::from_le_bytes(rsp_val));
         vm.set_reg(Register::Rsp, rsp + 8);
 
-        println!("HOOK: free(addr: 0x{:x})", obj_addr);
+        // println!("HOOK: free(addr: 0x{:x})", obj_addr);
 
         HookResult::Redirect
     };
 
-    let free_addr = snapshot_info.symbols.get("free")
-        .expect("Could not get free address");
+    // let free_addr = snapshot_info.symbols.get("free")
+    //     .expect("Could not get free address");
 
-    executor.add_hook(*free_addr, &mut free_hook)
+    // executor.add_hook(*free_addr, &mut free_hook)
+    //     .expect("Could not install free hook");
+
+    executor.add_hook(libmicrodns_module.start + 0x000022d0, &mut free_hook)
         .expect("Could not install free hook");
 
     // Calloc hook
@@ -843,7 +845,7 @@ fn main() {
         let alloc_size = obj_count.checked_mul(obj_size);
         let alloc_ptr = unsafe { MALLOC_PTR };
 
-        println!("HOOK: calloc(nmemb: 0x{:x}, size: 0x{:x}) -> 0x{:x}", obj_count, obj_size, alloc_ptr);
+        // println!("HOOK: calloc(nmemb: 0x{:x}, size: 0x{:x}) -> 0x{:x}", obj_count, obj_size, alloc_ptr);
 
         // Allocation way too big
         if alloc_size.is_none() {
@@ -873,10 +875,13 @@ fn main() {
         HookResult::Redirect
     };
 
-    let calloc_addr = snapshot_info.symbols.get("calloc")
-        .expect("Could not get caloc address");
+    // let calloc_addr = snapshot_info.symbols.get("calloc")
+    //     .expect("Could not get caloc address");
 
-    executor.add_hook(*calloc_addr, &mut calloc_hook)
+    // executor.add_hook(*calloc_addr, &mut calloc_hook)
+    //     .expect("Could not install free hook");
+
+    executor.add_hook(libmicrodns_module.start + 0x00002110, &mut calloc_hook)
         .expect("Could not install free hook");
 
     // Add end of function hook
@@ -884,7 +889,8 @@ fn main() {
         HookResult::Exit
     };
 
-    executor.add_hook(program_module.start + 0x1189, &mut exit_hook)
+    // Hook on mdns_free
+    executor.add_hook(libmicrodns_module.start + 0x3190, &mut exit_hook)
         .expect("Could not install exit hook");
 
 
