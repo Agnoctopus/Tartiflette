@@ -679,7 +679,7 @@ impl Vm {
 
         for (bm_index, bm_entry) in dirty_log.iter().enumerate() {
             for i in 0..64 {
-                let pa = (bm_index * 8 + i) * PAGE_SIZE;
+                let pa = (bm_index * 64 + i) * PAGE_SIZE;
 
                 if (bm_entry >> i) & 1 == 1 {
                     let mut data: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
