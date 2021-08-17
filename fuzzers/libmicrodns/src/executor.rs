@@ -42,6 +42,8 @@ where
     observers: OT,
     /// List of hooks installed by the user
     hooks: BTreeMap<u64, &'a mut TartifletteHook>,
+    /// Syscall hooking function
+    syscall_hook: Option<&'a mut TartifletteHook>,
     /// Map of coverage addresses to the corresponding original instruction byte
     coverage: BTreeSet<u64>,
     /// Original bytes before hooks or coverage
@@ -87,7 +89,17 @@ where
 
             match vmexit {
                 VmExit::Interrupted => break ExitKind::Timeout,
-                VmExit::Syscall => panic!("Not implemented for now"),
+                VmExit::Syscall => {
+                    if let Some(hook) = &mut self.syscall_hook {
+                        match hook(&mut self.exec_vm) {
+                            HookResult::Crash => break ExitKind::Crash,
+                            HookResult::Exit => break ExitKind::Ok,
+                            _ => {}
+                        }
+                    } else {
+                        panic!("Guest used a syscall but not handler was defined");
+                    }
+                },
                 VmExit::Breakpoint => {
                     // Handling the singlestep after a continue
                     if let Some(starting_rip) = singlestep {
@@ -115,6 +127,8 @@ where
                         // as we breakpointed on the instruction at rip.
                         self.exec_vm.write_value::<u8>(rip, *orig_byte)
                             .expect("Error while removing exec_vm coverage");
+                        self.reset_vm.write_value::<u8>(rip, *orig_byte)
+                            .expect("Error while removing reset_vm coverage");
 
                         // Remove the breakpoint from the coverage
                         self.coverage.remove(&rip);
@@ -123,6 +137,8 @@ where
                         // Add the coverage to the map
                         let map = map_observer.map_mut();
                         map[(rip as usize) % map.len()] += 1;
+
+                        println!("cov 0x{:x}", rip);
                     }
 
                     // Handle hooks
@@ -150,6 +166,10 @@ where
                         }
                     }
                 },
+                // TODO: See how to properly handle hlt (crash ? normal exit ? forward to user ?)
+                VmExit::Hlt => {
+                    panic!("guest abort (hlt)");
+                },
                 _ => break ExitKind::Crash
             }
         };
@@ -167,6 +187,7 @@ where
     I: Input,
     OT: ObserversTuple<I, S>
 {
+    /// Adds a coverage point to the executor
     pub fn add_coverage(&mut self, address: u64) -> Result<(), ExecutorError> {
         // Check that the spot is not already instrumented
         if self.hooks.contains_key(&address) {
@@ -181,6 +202,7 @@ where
 
             // Write breakpoint to memory
             self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
+            self.reset_vm.write_value::<u8>(address, 0xcc).unwrap();
 
             self.coverage.insert(address);
             self.orig_bytes.insert(address, orig_byte[0]);
@@ -190,6 +212,7 @@ where
         Ok(())
     }
 
+    /// Adds an address callback to the executor
     pub fn add_hook(&mut self, address: u64, hook: &'a mut TartifletteHook) -> Result<(), ExecutorError> {
         // Check that the spot is not already instrumented
         if self.coverage.contains(&address) {
@@ -205,11 +228,18 @@ where
         if self.hooks.insert(address, hook).is_none() {
             // Write breakpoint to memory. Should not fail as orig byte was read from same address
             self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
+            self.reset_vm.write_value::<u8>(address, 0xcc).unwrap();
+
             // New hook, add the original byte
             self.orig_bytes.insert(address, orig_byte[0]);
         }
 
         Ok(())
+    }
+
+    /// Adds a syscall handling callback to the executor
+    pub fn add_syscall_hook(&mut self, hook: &'a mut TartifletteHook) {
+        self.syscall_hook = Some(hook);
     }
 }
 
@@ -243,6 +273,7 @@ where
             exec_vm: vm.clone(),
             reset_vm: vm.clone(),
             hooks: Default::default(),
+            syscall_hook: None,
             coverage: Default::default(),
             orig_bytes: Default::default(),
             phantom: PhantomData::<(I, S)>
