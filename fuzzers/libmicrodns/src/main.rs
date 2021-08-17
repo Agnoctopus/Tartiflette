@@ -700,13 +700,13 @@ fn main() {
     // 32Mb of memory
     const MEMORY_SIZE: usize = 32 * 1024 * 1024;
 
-    let snapshot_info = SnapshotInfo::from_file("./data_2/snapshot_info.json")
+    let snapshot_info = SnapshotInfo::from_file("./data/snapshot_info.json")
         .expect("crash while parsing snapshot info");
     let program_module = snapshot_info.modules.get("harness")
         .expect("Could not find program module");
     let libmicrodns_module = snapshot_info.modules.get("libmicrodns.so.1.0.0")
         .expect("Could not find libmicrodns module");
-    let orig_vm = Vm::from_snapshot("./data_2/snapshot_info.json", "./data_2/snapshot_data.bin", MEMORY_SIZE)
+    let orig_vm = Vm::from_snapshot("./data/snapshot_info.json", "./data/snapshot_data.bin", MEMORY_SIZE)
         .expect("Could not load data from snapshot");
 
     let mut harness = |vm: &mut Vm, input: &BytesInput| {
