@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use crate::executor::{TartifletteExecutor, HookResult};
 
 static mut COV: [u8; 4096] = [0; 4096];
-static mut MALLOC_PTR: u64 = 0;
 
 fn main() {
     // Snapshot setup
@@ -698,11 +697,8 @@ fn main() {
         0x5391,
     ];
 
-    // 10Mb of memory
-    const MEMORY_SIZE: usize = 0x1000 * 0x1000 * 10;
-    const MALLOC_AREA_SIZE: usize = 0x3000;
-    const MALLOC_AREA_START: u64 = 0x1337000;
-    const MALLOC_AREA_END: u64 = MALLOC_AREA_START + MALLOC_AREA_SIZE as u64;
+    // 32Mb of memory
+    const MEMORY_SIZE: usize = 32 * 1024 * 1024;
 
     let snapshot_info = SnapshotInfo::from_file("./data_2/snapshot_info.json")
         .expect("crash while parsing snapshot info");
@@ -710,12 +706,8 @@ fn main() {
         .expect("Could not find program module");
     let libmicrodns_module = snapshot_info.modules.get("libmicrodns.so.1.0.0")
         .expect("Could not find libmicrodns module");
-    let mut orig_vm = Vm::from_snapshot("./data_2/snapshot_info.json", "./data_2/snapshot_data.bin", MEMORY_SIZE)
+    let orig_vm = Vm::from_snapshot("./data_2/snapshot_info.json", "./data_2/snapshot_data.bin", MEMORY_SIZE)
         .expect("Could not load data from snapshot");
-
-    // Allocate space for malloc hook
-    orig_vm.mmap(MALLOC_AREA_START, MALLOC_AREA_SIZE, PagePermissions::READ | PagePermissions::WRITE)
-        .expect("Could not allocate malloc area");
 
     let mut harness = |vm: &mut Vm, input: &BytesInput| {
         // Write the input to memory
@@ -725,11 +717,6 @@ fn main() {
         vm.write(input_ptr, input.bytes())
             .expect("Could not write to vm memory");
         vm.set_reg(Register::Rcx, input_len as u64);
-
-        // Reset malloc state
-        unsafe {
-            MALLOC_PTR = MALLOC_AREA_START;
-        }
 
         ExitKind::Ok
     };
@@ -743,7 +730,7 @@ fn main() {
     let mut state = StdState::new(
         StdRand::with_seed(current_nanos()),
         InMemoryCorpus::new(),
-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+        OnDiskCorpus::new(PathBuf::from("/tmp/crashes")).unwrap(),
         tuple_list!(feedback_state),
     );
 
@@ -764,135 +751,34 @@ fn main() {
     let mut executor = TartifletteExecutor::new(&orig_vm, tuple_list!(observer), &mut harness)
         .expect("Could not create executor");
 
-    // Add breakpoints
+    // Add breakpoints for coverage
     for addr in breakpoints.iter().cloned() {
         executor.add_coverage(libmicrodns_module.start + addr)
             .expect("Could not add breakpoint");
     }
-    // ================== Allocator hooks ==================//
-    // Hook for `malloc`
-    let mut malloc_hook = |vm: &mut Vm| {
-        let alloc_size = vm.get_reg(Register::Rdi);
-        let obj_ptr = unsafe { MALLOC_PTR };
-
-        // println!("HOOK: malloc(size: 0x{:x}) -> 0x{:x}", alloc_size, obj_ptr);
-
-        if obj_ptr + alloc_size > MALLOC_AREA_END {
-            panic!("Malloc area could not fulfill allocation");
-        }
-
-        // Get rsp and pop return address
-        let rsp = vm.get_reg(Register::Rsp);
-        let mut rsp_val: [u8; 8] = [0; 8];
-
-        vm.read(rsp, &mut rsp_val)
-            .expect("Could not read return address");
-
-        // Set return value and 'return' from the function
-        vm.set_reg(Register::Rax, obj_ptr);
-        vm.set_reg(Register::Rip, u64::from_le_bytes(rsp_val));
-        vm.set_reg(Register::Rsp, rsp + 8);
-
-        // Bump malloc allocator ptr
-        unsafe {
-            MALLOC_PTR += alloc_size;
-        }
-
-        HookResult::Redirect
-    };
-
-    // let malloc_addr = snapshot_info.symbols.get("malloc")
-    //     .expect("Could not find malloc address");
-
-    // executor.add_hook(*malloc_addr, &mut malloc_hook)
-    //     .expect("Could not install malloc hook");
-
-    executor.add_hook(libmicrodns_module.start + 0x000020c0, &mut malloc_hook)
-        .expect("Could not install malloc hook");
-
-    // Free hook
-    let mut free_hook = |vm: &mut Vm| {
-        let obj_addr = vm.get_reg(Register::Rdi);
-
-        // Return from function
-        let rsp = vm.get_reg(Register::Rsp);
-        let mut rsp_val: [u8; 8] = [0; 8];
-
-        vm.read(rsp, &mut rsp_val)
-            .expect("Could not read return address");
-
-        vm.set_reg(Register::Rip, u64::from_le_bytes(rsp_val));
-        vm.set_reg(Register::Rsp, rsp + 8);
-
-        // println!("HOOK: free(addr: 0x{:x})", obj_addr);
-
-        HookResult::Redirect
-    };
-
-    // let free_addr = snapshot_info.symbols.get("free")
-    //     .expect("Could not get free address");
-
-    // executor.add_hook(*free_addr, &mut free_hook)
-    //     .expect("Could not install free hook");
-
-    executor.add_hook(libmicrodns_module.start + 0x000022d0, &mut free_hook)
-        .expect("Could not install free hook");
-
-    // Calloc hook
-    let mut calloc_hook = |vm: &mut Vm| {
-        let obj_count = vm.get_reg(Register::Rdi);
-        let obj_size = vm.get_reg(Register::Rsi);
-        let alloc_size = obj_count.checked_mul(obj_size);
-        let alloc_ptr = unsafe { MALLOC_PTR };
-
-        // println!("HOOK: calloc(nmemb: 0x{:x}, size: 0x{:x}) -> 0x{:x}", obj_count, obj_size, alloc_ptr);
-
-        // Allocation way too big
-        if alloc_size.is_none() {
-            println!("crash here !");
-            return HookResult::Crash
-        }
-
-        if alloc_ptr + alloc_size.unwrap() > MALLOC_AREA_END {
-            panic!("Malloc zone cannot fulfill requested alloc");
-        }
-
-        // Return from function
-        let rsp = vm.get_reg(Register::Rsp);
-        let mut rsp_val: [u8; 8] = [0; 8];
-
-        vm.read(rsp, &mut rsp_val)
-            .expect("Could not read return address");
-
-        vm.set_reg(Register::Rip, u64::from_le_bytes(rsp_val));
-        vm.set_reg(Register::Rsp, rsp + 8);
-
-        // Bump malloc allocator ptr
-        unsafe {
-            MALLOC_PTR += alloc_size.unwrap();
-        }
-
-        HookResult::Redirect
-    };
-
-    // let calloc_addr = snapshot_info.symbols.get("calloc")
-    //     .expect("Could not get caloc address");
-
-    // executor.add_hook(*calloc_addr, &mut calloc_hook)
-    //     .expect("Could not install free hook");
-
-    executor.add_hook(libmicrodns_module.start + 0x00002110, &mut calloc_hook)
-        .expect("Could not install free hook");
 
     // Add end of function hook
     let mut exit_hook = |_: &mut Vm| {
         HookResult::Exit
     };
 
-    // Hook on mdns_free
-    executor.add_hook(libmicrodns_module.start + 0x3190, &mut exit_hook)
+    executor.add_hook(program_module.start + 0x1192, &mut exit_hook)
         .expect("Could not install exit hook");
 
+    // Handle syscalls
+    let mut syscall_hook = |vm: &mut Vm| {
+        let syscall = vm.get_reg(Register::Rax);
+
+        match syscall {
+            0xe7 => {
+                // exit_group(x)
+                HookResult::Exit
+            },
+            _ => panic!("Unhandled syscall 0x{:x}", syscall)
+        }
+    };
+
+    executor.add_syscall_hook(&mut syscall_hook);
 
     // Generator of printable bytearrays of max size 32
     let mut generator = RandPrintablesGenerator::new(16);
