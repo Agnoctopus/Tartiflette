@@ -21,7 +21,10 @@ use std::path::PathBuf;
 
 use crate::executor::{TartifletteExecutor, HookResult};
 
+/// Coverage map used by libAFL
 static mut COV: [u8; 4096] = [0; 4096];
+/// Current position of mmap area (bump allocator)
+static mut MMAP_HEAP_PTR: u64 = 0;
 
 fn main() {
     // Snapshot setup
@@ -699,6 +702,8 @@ fn main() {
 
     // 32Mb of memory
     const MEMORY_SIZE: usize = 32 * 1024 * 1024;
+    const MMAP_HEAP_START: u64 = 0x1337000;
+    const MMAP_HEAP_END: u64 = MMAP_HEAP_START + 32 * 0x1000;
 
     let snapshot_info = SnapshotInfo::from_file("./data/snapshot_info.json")
         .expect("crash while parsing snapshot info");
@@ -706,8 +711,14 @@ fn main() {
         .expect("Could not find program module");
     let libmicrodns_module = snapshot_info.modules.get("libmicrodns.so.1.0.0")
         .expect("Could not find libmicrodns module");
-    let orig_vm = Vm::from_snapshot("./data/snapshot_info.json", "./data/snapshot_data.bin", MEMORY_SIZE)
+    let mut orig_vm = Vm::from_snapshot("./data/snapshot_info.json", "./data/snapshot_data.bin", MEMORY_SIZE)
         .expect("Could not load data from snapshot");
+
+    // Alloc MMAP region
+    orig_vm.mmap(MMAP_HEAP_START, (MMAP_HEAP_END - MMAP_HEAP_START) as usize,
+        PagePermissions::READ | PagePermissions::WRITE | PagePermissions::EXECUTE)
+        .expect("Could not allocate mmap region");
+
 
     let mut harness = |vm: &mut Vm, input: &BytesInput| {
         // Write the input to memory
@@ -717,6 +728,11 @@ fn main() {
         vm.write(input_ptr, input.bytes())
             .expect("Could not write to vm memory");
         vm.set_reg(Register::Rcx, input_len as u64);
+
+        // Reset the mmap bump alloc ptr
+        unsafe {
+            MMAP_HEAP_PTR = MMAP_HEAP_START;
+        }
 
         ExitKind::Ok
     };
@@ -774,18 +790,65 @@ fn main() {
                 // exit_group(x)
                 HookResult::Exit
             },
+            0x9 => {
+                // mmap(...)
+                let addr = vm.get_reg(Register::Rdi);
+                let len = vm.get_reg(Register::Rsi);
+                let prot = vm.get_reg(Register::Rdx);
+                let fd = vm.get_reg(Register::R8) as i64;
+
+                if fd != -1 {
+                    panic!("mmaping from a fd is not supported");
+                }
+
+                if len & 0xfff != 0 {
+                    panic!("Len is not aligned: 0x{:x}", len);
+                }
+
+                if addr != 0 {
+                    panic!("Mapping to fixed address (0x{:x}), is not supported", addr);
+                }
+
+                let mmap_heap = unsafe { MMAP_HEAP_PTR };
+
+                if mmap_heap + len > MMAP_HEAP_END {
+                    panic!("mmap request too large for reserved region");
+                }
+
+                // println!("sys_mmap(addr: 0x{:x}, len: 0x{:x}, prot: 0x{:x}, fd: {}) = 0x{:x}",
+                //     addr, len, prot, fd, mmap_heap);
+
+                vm.set_reg(Register::Rax, mmap_heap);
+
+                unsafe {
+                    MMAP_HEAP_PTR += len;
+                }
+
+                HookResult::Continue
+            },
+            0xb => {
+                // munmap
+                let addr = vm.get_reg(Register::Rdi);
+                let len = vm.get_reg(Register::Rsi);
+
+                // println!("sys_munmap(addr: 0x{:x}, len: 0x{:x}) = 0", addr, len);
+
+                vm.set_reg(Register::Rax, 0);
+
+                HookResult::Continue
+            }
             _ => panic!("Unhandled syscall 0x{:x}", syscall)
         }
     };
 
     executor.add_syscall_hook(&mut syscall_hook);
 
-    // Generator of printable bytearrays of max size 32
-    let mut generator = RandPrintablesGenerator::new(16);
+    // Generator of printable bytearrays of max size 64
+    let mut generator = RandPrintablesGenerator::new(64);
 
     // Generate 8 initial inputs
     state
-        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 32)
+        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 64)
         .expect("Failed to generate the initial corpus");
 
     // Setup a mutational stage with a basic bytes mutator
