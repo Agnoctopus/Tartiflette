@@ -98,18 +98,6 @@ impl PhysicalMemory {
         pdata.copy_from_slice(input);
         Ok(())
     }
-
-    /// Returns a copy of the physical memory
-    pub fn clone(&self) -> Result<Self> {
-        let mut pmem = PhysicalMemory::new(self.size)?;
-
-        // Copy old data
-        let old_data = self.raw_slice(0, self.size())?;
-        pmem.write(0, old_data)?;
-        pmem.top = self.top;
-
-        Ok(pmem)
-    }
 }
 
 /// Bump allocator

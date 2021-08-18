@@ -185,16 +185,6 @@ impl VirtualMemory {
         self.page_directory
     }
 
-    /// Returns a copy of the `VirtualMemory`
-    pub fn clone(&self) -> Result<Self> {
-        let pmem = self.pmem.clone()?;
-
-        Ok(VirtualMemory {
-            pmem: pmem,
-            page_directory: self.page_directory,
-        })
-    }
-
     /// Returns the host starting address for guest memory
     pub fn host_address(&self) -> u64 {
         self.pmem.host_address() as u64
