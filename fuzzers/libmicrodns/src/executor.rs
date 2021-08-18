@@ -29,6 +29,7 @@ pub enum HookResult {
 }
 
 pub type TartifletteHook = dyn FnMut(&mut Vm) -> HookResult;
+pub type CoverageHook = dyn FnMut(u64);
 
 pub struct TartifletteExecutor<'a, H, I, OT, S>
 where
@@ -46,6 +47,8 @@ where
     syscall_hook: Option<&'a mut TartifletteHook>,
     /// Map of coverage addresses to the corresponding original instruction byte
     coverage: BTreeSet<u64>,
+    /// Coverage hook
+    coverage_hook: Option<&'a mut CoverageHook>,
     /// Original bytes before hooks or coverage
     orig_bytes: BTreeMap<u64, u8>,
     /// Vm used for the execution
@@ -138,7 +141,11 @@ where
                         let map = map_observer.map_mut();
                         map[(rip as usize) % map.len()] += 1;
 
-                        println!("cov 0x{:x}", rip);
+                        // Call coverage hook if any
+                        if let Some(hook) = &mut self.coverage_hook {
+                            hook(rip)
+                        }
+
                     }
 
                     // Handle hooks
@@ -241,6 +248,11 @@ where
     pub fn add_syscall_hook(&mut self, hook: &'a mut TartifletteHook) {
         self.syscall_hook = Some(hook);
     }
+
+    /// Adds a hook to the executor that is called each time there is new coverage
+    pub fn add_coverage_hook(&mut self, hook: &'a mut CoverageHook) {
+        self.coverage_hook = Some(hook);
+    }
 }
 
 impl<'a, H, I, OT, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, OT, S>
@@ -275,6 +287,7 @@ where
             hooks: Default::default(),
             syscall_hook: None,
             coverage: Default::default(),
+            coverage_hook: None,
             orig_bytes: Default::default(),
             phantom: PhantomData::<(I, S)>
         })

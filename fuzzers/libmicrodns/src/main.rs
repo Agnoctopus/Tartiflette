@@ -18,6 +18,9 @@ use libafl::{
     stats::SimpleStats,
 };
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::LineWriter;
 
 use crate::executor::{TartifletteExecutor, HookResult};
 
@@ -794,7 +797,7 @@ fn main() {
                 // mmap(...)
                 let addr = vm.get_reg(Register::Rdi);
                 let len = vm.get_reg(Register::Rsi);
-                let prot = vm.get_reg(Register::Rdx);
+                // let prot = vm.get_reg(Register::Rdx);
                 let fd = vm.get_reg(Register::R8) as i64;
 
                 if fd != -1 {
@@ -828,8 +831,8 @@ fn main() {
             },
             0xb => {
                 // munmap
-                let addr = vm.get_reg(Register::Rdi);
-                let len = vm.get_reg(Register::Rsi);
+                // let addr = vm.get_reg(Register::Rdi);
+                // let len = vm.get_reg(Register::Rsi);
 
                 // println!("sys_munmap(addr: 0x{:x}, len: 0x{:x}) = 0", addr, len);
 
@@ -842,6 +845,20 @@ fn main() {
     };
 
     executor.add_syscall_hook(&mut syscall_hook);
+
+    // Collect coverage for lighthouse
+    let cov_file = File::create("cov.txt")
+        .expect("Could not create coverage file");
+    let mut cov_file = LineWriter::new(cov_file);
+    let mod_base = libmicrodns_module.start;
+
+    let mut coverage_hook = move |addr| {
+        let offset = addr - mod_base;
+        write!(cov_file, "libmicrodns.so.1.0.0+0x{:x}\n", offset)
+            .expect("Could not write to file");
+    };
+
+    executor.add_coverage_hook(&mut coverage_hook);
 
     // Generator of printable bytearrays of max size 64
     let mut generator = RandPrintablesGenerator::new(64);
