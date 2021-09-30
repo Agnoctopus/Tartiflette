@@ -1,0 +1,12 @@
+[package]
+name = "fuzzer-libmicrodns-multithread"
+version = "0.5.0"
+authors = ["César Belley <cesar.belley@lse.epita.fr>",
+           "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
+edition = "2018"
+
+[dependencies]
+tartiflette-vm = { path = "../../vm" }
+libafl = "0.6.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
