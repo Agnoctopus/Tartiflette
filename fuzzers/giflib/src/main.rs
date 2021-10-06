@@ -28,9 +28,12 @@ use std::cmp;
 use std::cell::RefCell;
 use std::path::{PathBuf, Path};
 use std::rc::Rc;
-use std::io::prelude::*;
-use std::io::BufReader;
 use std::fs::File;
+use std::io::{
+    prelude::*,
+    BufReader,
+    LineWriter
+};
 
 // TODO: Find how to have a coverage map without unsafe and static
 static mut COVERAGE: [u8; 8192] = [0; 8192];
@@ -61,7 +64,6 @@ fn main() {
         const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
         const FUZZ_INPUT_OFFSET: u64 = 0x8120;
         const FUZZ_INPUT_SIZE: usize = 1 << 16; // Keep in sync with the C code
-        const END_RIP: u64 = 0x1436;
 
         // Load the snapshot info (contains mappings and symbols)
         let snapshot_info = SnapshotInfo::from_file("./data/snapshot_info.json")
@@ -148,7 +150,7 @@ fn main() {
         };
 
         executor.add_hook(program_module.start + 0x1110, &mut exit_hook)
-        .expect("Could not install exit hook");
+            .expect("Could not install exit hook");
 
         // Install syscall hook
         let semu = Rc::clone(&sysemu);
@@ -174,6 +176,20 @@ fn main() {
         }
 
         println!("Added {} coverage breakpoints", breakpoints.len());
+
+        // Collect coverage for lighthouse
+        let cov_file = File::create("cov.txt")
+            .expect("Could not create coverage file");
+        let mut cov_file = LineWriter::new(cov_file);
+        let mod_base = program_module.start;
+
+        let mut coverage_hook = move |addr| {
+            let offset = addr - mod_base;
+            write!(cov_file, "giftext_fuzz+0x{:x}\n", offset)
+                .expect("Could not write to file");
+        };
+
+        executor.add_coverage_hook(&mut coverage_hook);
 
         // Load initial inputs
         let corpus_folders = &[PathBuf::from("./data/corpus")];
