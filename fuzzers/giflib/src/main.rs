@@ -1,6 +1,7 @@
 mod executor;
+mod sysemu;
 
-use tartiflette_vm::{Vm, Register, SnapshotInfo, PagePermissions};
+use tartiflette_vm::{Vm, SnapshotInfo, PagePermissions};
 use libafl::{
     bolts::{
         current_nanos,
@@ -14,19 +15,25 @@ use libafl::{
     inputs::{BytesInput, HasBytesVec},
     executors::ExitKind,
     state::StdState,
-    fuzzer::StdFuzzer,
+    fuzzer::{Fuzzer, StdFuzzer},
     observers::StdMapObserver,
     feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback},
+    mutators::scheduled::{havoc_mutations, StdScheduledMutator},
+    stages::mutational::StdMutationalStage,
     stats::MultiStats
 };
 use crate::executor::{TartifletteExecutor, HookResult};
+use crate::sysemu::SysEmu;
 use std::cmp;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 // Starts a fuzzing run
 fn main() {
     let mut run_client = |_: Option<StdState<_, _, _, _, _>>, mut mgr| {
         // Vm setup
-        const MEMORY_SIZE: usize = 16 * 1024 * 1024; // 16Mb should be enough
+        const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
         const FUZZ_INPUT_OFFSET: u64 = 0x8120;
         const FUZZ_INPUT_SIZE: usize = 1 << 16; // Keep in sync with the C code
         const END_RIP: u64 = 0x1436;
@@ -54,8 +61,24 @@ fn main() {
                 .expect("Could not patch out import");
         }
 
+        // mmap reserve area as well as the syscall emulation layer
+        const MMAP_START: u64 = 0x1337000;
+        const MMAP_SIZE: u64 = 0x100000;
+        const MMAP_END: u64 = MMAP_START + MMAP_SIZE;
+
+        orig_vm.mmap(MMAP_START, MMAP_SIZE as usize, PagePermissions::READ | PagePermissions::WRITE)
+            .expect("Could not allocate mmap memory");
+
+        let sysemu = Rc::new(RefCell::new(SysEmu::new(MMAP_START, MMAP_END)));
+
         // Create the fuzzing harness
-        let mut harness = |vm: &mut Vm, input: &BytesInput| {
+        let hemu = Rc::clone(&sysemu);
+
+        let mut harness = move |vm: &mut Vm, input: &BytesInput| {
+            // Reset the emulaton layer state
+            let mut emu = hemu.borrow_mut();
+            emu.reset();
+
             let input_ptr = program_module.start + FUZZ_INPUT_OFFSET;
             let input_len = cmp::min(FUZZ_INPUT_SIZE, input.bytes().len());
 
@@ -97,12 +120,40 @@ fn main() {
             .expect("Could not create executor");
 
         // Exit hook to end the fuzz case when the guest calls exit(...)
-        executor.add_hook(program_module.start + 0x1110, &mut |_: &mut Vm| {
+        let mut exit_hook = |_: &mut Vm| {
             HookResult::Exit
-        })
+        };
+
+        executor.add_hook(program_module.start + 0x1110, &mut exit_hook)
         .expect("Could not install exit hook");
 
-        // TODO: Rest of the owl
+        // Install syscall hook
+        let semu = Rc::clone(&sysemu);
+
+        let mut syscall_hook = move |vm: &mut Vm| {
+            let mut emu = semu.borrow_mut();
+
+            if emu.syscall(vm) {
+                HookResult::Continue
+            } else {
+                HookResult::Exit
+            }
+        };
+
+        executor.add_syscall_hook(&mut syscall_hook);
+
+        // Load initial inputs
+        let corpus_folders = &[PathBuf::from("./data/corpus")];
+        state.load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, corpus_folders);
+
+        // Setup mutation stages
+        let mutator = StdScheduledMutator::new(havoc_mutations());
+        let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+        // Fuzz
+        fuzzer
+            .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
+            .expect("Error in the fuzzing loop");
 
         Ok(())
     };
