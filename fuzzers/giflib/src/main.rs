@@ -26,11 +26,36 @@ use crate::executor::{TartifletteExecutor, HookResult};
 use crate::sysemu::SysEmu;
 use std::cmp;
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::rc::Rc;
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::fs::File;
+
+// TODO: Find how to have a coverage map without unsafe and static
+static mut COVERAGE: [u8; 8192] = [0; 8192];
+
+/// Loads breakpoints from a file
+fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
+    let bpkt_file = File::open(s)
+        .expect("Could not open breakpoint file");
+    let reader = BufReader::new(bpkt_file);
+    let mut result = Vec::new();
+
+    for line in reader.lines() {
+        let l = line.expect("Got error while reading line in breakpoint file");
+
+        if l.starts_with("0x") {
+            result.push(u64::from_str_radix(l.trim_start_matches("0x"), 16).unwrap());
+        }
+    }
+
+    result
+}
 
 // Starts a fuzzing run
 fn main() {
+
     let mut run_client = |_: Option<StdState<_, _, _, _, _>>, mut mgr| {
         // Vm setup
         const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
@@ -90,9 +115,7 @@ fn main() {
         };
 
         // Setup libAFL
-        let mut coverage: [u8; 8192] = [0; 8192];
-
-        let observer = StdMapObserver::new("coverage", &mut coverage);
+        let observer = StdMapObserver::new("coverage", unsafe { &mut COVERAGE });
         let feedback_state = MapFeedbackState::with_observer(&observer);
         let feedback = MaxMapFeedback::new(&feedback_state, &observer);
         let objective = CrashFeedback::new();
@@ -142,9 +165,22 @@ fn main() {
 
         executor.add_syscall_hook(&mut syscall_hook);
 
+        // Load coverage breakponts
+        let breakpoints = load_breakpoints("./data/breakpoints.txt");
+
+        for bkpt in &breakpoints {
+            executor.add_coverage(program_module.start + bkpt)
+                .expect("Error while adding breakpoint");
+        }
+
+        println!("Added {} coverage breakpoints", breakpoints.len());
+
         // Load initial inputs
         let corpus_folders = &[PathBuf::from("./data/corpus")];
-        state.load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, corpus_folders);
+
+        state
+            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, corpus_folders)
+            .expect("Could not load corpus files");
 
         // Setup mutation stages
         let mutator = StdScheduledMutator::new(havoc_mutations());
