@@ -81,7 +81,7 @@ fn main() {
         .expect("Could not create vm from snapshot");
 
         // Disabling *printf, puts and putchar by replacing plt jumps with ret
-        let disabled_printf = vec![0x1030, 0x1040, 0x1060, 0x1080, 0x10b0, 0x1140];
+        let disabled_printf = vec![0x1020, 0x1030, 0x1040, 0x1060, 0x1080, 0x10b0, 0x1140];
 
         for off in disabled_printf.iter() {
             orig_vm.write(program_module.start + off, &[0xc3])
@@ -149,7 +149,7 @@ fn main() {
             HookResult::Exit
         };
 
-        executor.add_hook(program_module.start + 0x1110, &mut exit_hook)
+        executor.add_hook(program_module.start + 0x1450, &mut exit_hook)
             .expect("Could not install exit hook");
 
         // Install syscall hook
