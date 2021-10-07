@@ -5,8 +5,9 @@ An attempt at snapshot fuzzing using KVM and libAFL.
 
 # Architecture
 
-- vm: Unicorn like api over KVM
-- fuzzers/libmicrodns: Sample harness for fuzzing libmicrodns using tartiflette-vm
+- **vm**: Unicorn like api over KVM
+- **fuzzers/giflib**: Sample harness for fuzzing giflib using tartiflette-vm
+- **scripts**: debugger scripts for capturing snapshots
 
 # Authors
 
