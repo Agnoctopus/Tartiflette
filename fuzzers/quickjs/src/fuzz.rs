@@ -1,4 +1,4 @@
-use tartiflette_vm::{Vm, SnapshotInfo, PagePermissions};
+use tartiflette_vm::{Vm, Register, SnapshotInfo, PagePermissions};
 use libafl::{
     bolts::{
         current_nanos,
@@ -75,7 +75,7 @@ pub fn fuzz(config: FuzzerConfig) {
             .expect("Crash while parsing snapshot information");
         // Get the program module info. Userful for setting breakpoint when PIE
         // is enabled
-        let program_module = snapshot_info.modules.get("giftext_fuzz")
+        let program_module = snapshot_info.modules.get("qjs")
             .expect("Could not find program module");
         // Load the VM state from the snapshot info + memory dump
         let mut orig_vm = Vm::from_snapshot(
@@ -84,14 +84,6 @@ pub fn fuzz(config: FuzzerConfig) {
             MEMORY_SIZE
         )
         .expect("Could not create vm from snapshot");
-
-        // Disabling *printf, puts and putchar by replacing plt jumps with ret
-        let disabled_printf = vec![0x1020, 0x1030, 0x1040, 0x1060, 0x1080, 0x10b0, 0x1140];
-
-        for off in disabled_printf.iter() {
-            orig_vm.write(program_module.start + off, &[0xc3])
-                .expect("Could not patch out import");
-        }
 
         // mmap reserve area as well as the syscall emulation layer
         const MMAP_START: u64 = 0x1337000;
@@ -103,6 +95,13 @@ pub fn fuzz(config: FuzzerConfig) {
 
         let sysemu = Rc::new(RefCell::new(SysEmu::new(MMAP_START, MMAP_END)));
 
+        // Reserve area for the input
+        const INPUT_START: u64 = 0x22000;
+        const INPUT_SIZE: u64 = 0x1000;
+
+        orig_vm.mmap(INPUT_START, INPUT_SIZE as usize, PagePermissions::READ)
+            .expect("Could not allocate input memory");
+
         // Create the fuzzing harness
         let hemu = Rc::clone(&sysemu);
 
@@ -111,11 +110,12 @@ pub fn fuzz(config: FuzzerConfig) {
             let mut emu = hemu.borrow_mut();
             emu.reset();
 
-            let input_ptr = program_module.start + FUZZ_INPUT_OFFSET;
-            let input_len = cmp::min(FUZZ_INPUT_SIZE, input.bytes().len());
+            let fake_input = "1+1";
+            vm.set_reg(Register::Rsi, INPUT_START);
+            vm.set_reg(Register::Rdx, fake_input.len() as u64);
 
             // Write the fuzz case to the vm memory
-            vm.write(input_ptr, &input.bytes()[..input_len])
+            vm.write(INPUT_START, fake_input.as_bytes())
                 .expect("Could not write fuzz case to vm memory");
 
             ExitKind::Ok
@@ -154,7 +154,7 @@ pub fn fuzz(config: FuzzerConfig) {
             HookResult::Exit
         };
 
-        executor.add_hook(program_module.start + 0x1450, &mut exit_hook)
+        executor.add_hook(program_module.start + 0x1768e, &mut exit_hook)
             .expect("Could not install exit hook");
 
         // Install syscall hook
@@ -190,7 +190,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
         let mut coverage_hook = move |addr| {
             let offset = addr - mod_base;
-            write!(cov_file, "giftext_fuzz+0x{:x}\n", offset)
+            write!(cov_file, "qjs+0x{:x}\n", offset)
                 .expect("Could not write to file");
         };
 

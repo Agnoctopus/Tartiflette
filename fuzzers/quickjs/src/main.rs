@@ -37,7 +37,7 @@ fn main() {
     let config = FuzzerConfig {
         cores: matches.value_of("cores").unwrap(),
         broker_address: matches.value_of("broker_address"),
-        broker_port: matches.value_of("port").unwrap()
+        broker_port: matches.value_of("broker_port").unwrap()
     };
 
     fuzz::fuzz(config);
