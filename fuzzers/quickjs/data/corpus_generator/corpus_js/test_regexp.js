@@ -1,0 +1,18 @@
+var a, str;
+str = "abbbbbc";
+a = /(b+)c/.exec(str);
+a = /(b+)c/.test(str);
+/\x61/.exec("a")[0];
+/\u0061/.exec("a")[0];
+/\ca/.exec("\x01")[0];
+/\\a/.exec("\\a")[0];
+/\c0/.exec("\\c0")[0];
+a = /(\.(?=com|org)|\/)/.exec("ah.com");
+a = /(\.(?!com|org)|\/)/.exec("ah.com");
+a = /(?=(a+))/.exec("baaabac");
+a = /(z)((a+)?(b+)?(c))*/.exec("zaacbbbcac");
+a = eval("/\0a/");
+a.toString();
+a.exec("\0a")[0];
+/{1a}/.toString();
+a = /a{1+/.exec("a{11");

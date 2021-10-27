@@ -1,0 +1,16 @@
+{
+  "name": "corpus_generator",
+  "version": "1.0.0",
+  "description": "Generates encoded javascript corpuses",
+  "main": "generator.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^8.3.0",
+    "esprima": "^4.0.1",
+    "javascript-obfuscator": "^3.0.0"
+  }
+}
