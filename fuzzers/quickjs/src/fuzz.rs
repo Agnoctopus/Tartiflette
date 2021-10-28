@@ -1,5 +1,6 @@
 use tartiflette_vm::{Vm, Register, SnapshotInfo, PagePermissions};
 use libafl::{
+    feedback_or,
     bolts::{
         current_nanos,
         tuples::tuple_list,
@@ -8,24 +9,26 @@ use libafl::{
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider}
     },
-    corpus::{InMemoryCorpus, QueueCorpusScheduler},
+    corpus::{InMemoryCorpus, OnDiskCorpus, QueueCorpusScheduler},
     inputs::{BytesInput, HasBytesVec},
-    executors::ExitKind,
+    executors::{TimeoutExecutor, ExitKind},
     state::StdState,
     fuzzer::{Fuzzer, StdFuzzer},
-    observers::StdMapObserver,
-    feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback},
+    observers::{StdMapObserver, TimeObserver},
+    feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback, TimeFeedback},
     mutators::scheduled::{havoc_mutations, StdScheduledMutator},
     stages::mutational::StdMutationalStage,
     stats::MultiStats
 };
+use serde::Deserialize;
 use crate::executor::{TartifletteExecutor, HookResult};
 use crate::sysemu::SysEmu;
-use std::cmp;
+use std::io::BufWriter;
 use std::cell::RefCell;
 use std::path::{PathBuf, Path};
 use std::rc::Rc;
 use std::fs::File;
+use std::time::Duration;
 use std::io::{
     prelude::*,
     BufReader,
@@ -41,8 +44,14 @@ pub struct FuzzerConfig<'a> {
     pub broker_port: &'a str
 }
 
+/// Encoded javascript tokens
+#[derive(Deserialize)]
+struct TokenCache {
+    tokens: Vec<String>
+}
+
 // TODO: Find how to have a coverage map without unsafe and static
-static mut COVERAGE: [u8; 8192] = [0; 8192];
+static mut COVERAGE: [u8; 1 << 15] = [0u8; 1 << 15];
 
 /// Loads breakpoints from a file
 fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
@@ -64,11 +73,9 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
 
 // Starts a fuzzing run
 pub fn fuzz(config: FuzzerConfig) {
-    let mut run_client = |_: Option<StdState<_, _, _, _, _>>, mut mgr| {
+    let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr| {
         // Vm setup
         const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
-        const FUZZ_INPUT_OFFSET: u64 = 0x8120;
-        const FUZZ_INPUT_SIZE: usize = 1 << 16; // Keep in sync with the C code
 
         // Load the snapshot info (contains mappings and symbols)
         let snapshot_info = SnapshotInfo::from_file("./data/snapshot_info.json")
@@ -105,17 +112,35 @@ pub fn fuzz(config: FuzzerConfig) {
         // Create the fuzzing harness
         let hemu = Rc::clone(&sysemu);
 
+        // Setup the decoding objects
+        let tokens_str = std::fs::read_to_string("./data/tokens.json").unwrap();
+        let token_cache: TokenCache = serde_json::from_str(&tokens_str).unwrap();
+
         let mut harness = move |vm: &mut Vm, input: &BytesInput| {
             // Reset the emulaton layer state
             let mut emu = hemu.borrow_mut();
             emu.reset();
 
-            let fake_input = "1+1";
+            // Decode the encoded input to text javascript
+            let mut input_buffer = [0u8; (INPUT_SIZE - 1) as usize];
+            let mut token_writer = BufWriter::new(&mut input_buffer[..]);
+
+            // TODO: Use a BytesInput of u16 instead of u8
+            for chunk in input.bytes().chunks_exact(2) {
+                let token_index: u16 = chunk[0] as u16 | ((chunk[1] as u16) << 8);
+                let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
+                token_writer.write(token_str.as_bytes());
+            }
+
+            let js_input = token_writer.buffer();
+
             vm.set_reg(Register::Rsi, INPUT_START);
-            vm.set_reg(Register::Rdx, fake_input.len() as u64);
+            vm.set_reg(Register::Rdx, js_input.len() as u64);
+
+            // panic!("code: {}", String::from_utf8_lossy(js_input));
 
             // Write the fuzz case to the vm memory
-            vm.write(INPUT_START, fake_input.as_bytes())
+            vm.write(INPUT_START, js_input)
                 .expect("Could not write fuzz case to vm memory");
 
             ExitKind::Ok
@@ -123,21 +148,28 @@ pub fn fuzz(config: FuzzerConfig) {
 
         // Setup libAFL
         let observer = StdMapObserver::new("coverage", unsafe { &mut COVERAGE });
+        let time_observer = TimeObserver::new("time");
+
         let feedback_state = MapFeedbackState::with_observer(&observer);
-        let feedback = MaxMapFeedback::new(&feedback_state, &observer);
+        let feedback = feedback_or!(
+            MaxMapFeedback::new(&feedback_state, &observer),
+            TimeFeedback::new_with_observer(&time_observer)
+        );
         let objective = CrashFeedback::new();
 
         // The fuzzer's state
-        let mut state = StdState::new(
-            // First argument is the randomness sources
-            StdRand::with_seed(current_nanos()),
-            // Second argument is the corpus
-            InMemoryCorpus::new(),
-            // Third argument is the solutions corpus (here crashes)
-            InMemoryCorpus::new(),
-            // Fourth argument is the feedback states, used to evaluate the input
-            tuple_list!(feedback_state)
-        );
+        let mut state = state.unwrap_or_else(|| {
+            StdState::new(
+                // First argument is the randomness sources
+                StdRand::with_seed(current_nanos()),
+                // Second argument is the corpus
+                InMemoryCorpus::new(),
+                // Third argument is the solutions corpus (here crashes)
+                InMemoryCorpus::new(),
+                // Fourth argument is the feedback states, used to evaluate the input
+                tuple_list!(feedback_state),
+            )
+        });
 
         // Setting up the fuzzer
         // The corpus fuzz case scheduling policy
@@ -146,7 +178,7 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut fuzzer = StdFuzzer::new(corpus_scheduler, feedback, objective);
 
         // Setup the executor and related hooks
-        let mut executor = TartifletteExecutor::new(&orig_vm, tuple_list!(observer), &mut harness)
+        let mut executor = TartifletteExecutor::new(&orig_vm, tuple_list!(observer, time_observer), &mut harness)
             .expect("Could not create executor");
 
         // Exit hook to end the fuzz case when the guest calls exit(...)
@@ -208,8 +240,10 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
         // Fuzz
+        let mut timeout_executor = TimeoutExecutor::new(executor, Duration::new(1, 0));
+
         fuzzer
-            .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
+            .fuzz_loop(&mut stages, &mut timeout_executor, &mut state, &mut mgr)
             .expect("Error in the fuzzing loop");
 
         Ok(())
