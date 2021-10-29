@@ -1,13 +1,37 @@
 use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
+use std::time::{Duration, Instant};
 use libafl::{
     executors::{Executor, ExitKind, HasObservers},
     observers::{ObserversTuple, StdMapObserver, MapObserver},
     inputs::Input,
     Error
 };
+use nix::sys::signal::{sigaction, Signal, SigHandler, SigAction, SigSet, SaFlags};
+use nix::unistd::alarm;
 use tartiflette_vm::{Vm, VmExit, Register};
+
+// XXX: Big hack to handle timeouts. We simply catch SIGALARM and do nothing,
+//      which will make kvm_run(...) fail with EINTR so we can return a timeout.
+extern "C" fn alarm_handler(_: i32) {
+    // Do nothing
+}
+
+pub fn install_alarm_handler() {
+    unsafe {
+        let action = SigAction::new(
+            SigHandler::Handler(alarm_handler),
+            SaFlags::empty(),
+            SigSet::empty()
+        );
+
+        sigaction(
+            Signal::SIGALRM,
+            &action
+        );
+    }
+}
 
 /// Error during executor actions
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +79,8 @@ where
     exec_vm: Vm,
     /// Vm used for reseting
     reset_vm: Vm,
+    /// Timeout duration
+    timeout_duration: Duration,
     /// Execution hooks
     phantom: PhantomData<(I, S)>
 }
@@ -84,8 +110,20 @@ where
         // contain the address where we removed the breakpoint.
         let mut singlestep: Option<u64> = None;
 
+        // Install the alarm
+        alarm::set(self.timeout_duration.as_secs() as u32);
+
+        // Usually the SIGALRM should land when we are in the kvm_run ioctl.
+        // In the rare case where it would land outside the kvm_run, we have
+        // to manually track the time to exit early on the next kvm_run.
+        let starting_time = Instant::now();
+
         // Execution loop
         let exit_kind = loop {
+            if starting_time.elapsed() > self.timeout_duration {
+                break ExitKind::Timeout;
+            }
+
             let vmexit = self.exec_vm.run()
                 .expect("Unexpected vm error");
             let rip = self.exec_vm.get_reg(Register::Rip);
@@ -180,6 +218,9 @@ where
                 _ => break ExitKind::Crash
             }
         };
+
+        // Remove the alarm
+        alarm::cancel();
 
         // Reset the vm to its original state
         self.exec_vm.reset(&self.reset_vm);
@@ -278,7 +319,9 @@ where
     I: Input,
     OT: ObserversTuple<I, S>
 {
-    pub fn new(vm: &Vm, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
+    pub fn new(vm: &Vm, timeout: Duration, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
+        assert!(timeout >= Duration::from_secs(1), "Timeout must at least be 1 second");
+
         Ok(TartifletteExecutor {
             harness_fn: harness,
             observers,
@@ -289,6 +332,7 @@ where
             coverage: Default::default(),
             coverage_hook: None,
             orig_bytes: Default::default(),
+            timeout_duration: timeout,
             phantom: PhantomData::<(I, S)>
         })
     }

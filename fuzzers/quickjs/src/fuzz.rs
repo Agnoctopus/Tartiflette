@@ -21,7 +21,7 @@ use libafl::{
     stats::MultiStats
 };
 use serde::Deserialize;
-use crate::executor::{TartifletteExecutor, HookResult};
+use crate::executor::{TartifletteExecutor, HookResult, install_alarm_handler};
 use crate::sysemu::SysEmu;
 use std::io::BufWriter;
 use std::cell::RefCell;
@@ -74,6 +74,9 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
 // Starts a fuzzing run
 pub fn fuzz(config: FuzzerConfig) {
     let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr| {
+        // XXX: Install the SIGALRM handler
+        install_alarm_handler();
+
         // Vm setup
         const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
 
@@ -178,8 +181,12 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut fuzzer = StdFuzzer::new(corpus_scheduler, feedback, objective);
 
         // Setup the executor and related hooks
-        let mut executor = TartifletteExecutor::new(&orig_vm, tuple_list!(observer, time_observer), &mut harness)
-            .expect("Could not create executor");
+        let mut executor = TartifletteExecutor::new(
+            &orig_vm,
+            Duration::from_millis(1000),
+            tuple_list!(observer, time_observer),
+            &mut harness
+        ).expect("Could not create executor");
 
         // Exit hook to end the fuzz case when the guest calls exit(...)
         let mut exit_hook = |_: &mut Vm| {
