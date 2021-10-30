@@ -1,5 +1,5 @@
 [package]
-name = "fuzzer-giflib"
+name = "fuzzer-quickjs"
 version = "0.6.1"
 authors = ["César Belley <cesar.belley@lse.epita.fr>",
            "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
