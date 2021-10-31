@@ -77,8 +77,8 @@ pub fn fuzz(config: FuzzerConfig) {
         // XXX: Install the SIGALRM handler
         install_alarm_handler();
 
-        // Vm setup
-        const MEMORY_SIZE: usize = 32 * 1024 * 1024; // 32Mb should be enough
+        // Vm memory size, 32Mb should be enough
+        const MEMORY_SIZE: usize = 32 * 1024 * 1024;
 
         // Load the snapshot info (contains mappings and symbols)
         let snapshot_info = SnapshotInfo::from_file("./data/snapshot_info.json")
@@ -87,6 +87,8 @@ pub fn fuzz(config: FuzzerConfig) {
         // is enabled
         let program_module = snapshot_info.modules.get("qjs")
             .expect("Could not find program module");
+
+
         // Load the VM state from the snapshot info + memory dump
         let mut orig_vm = Vm::from_snapshot(
             "./data/snapshot_info.json",
@@ -95,20 +97,18 @@ pub fn fuzz(config: FuzzerConfig) {
         )
         .expect("Could not create vm from snapshot");
 
-        // mmap reserve area as well as the syscall emulation layer
+        // Reserve area for the syscall emulation layer
         const MMAP_START: u64 = 0x1337000;
         const MMAP_SIZE: u64 = 0x100000;
         const MMAP_END: u64 = MMAP_START + MMAP_SIZE;
-
         orig_vm.mmap(MMAP_START, MMAP_SIZE as usize, PagePermissions::READ | PagePermissions::WRITE)
             .expect("Could not allocate mmap memory");
 
         let sysemu = Rc::new(RefCell::new(SysEmu::new(MMAP_START, MMAP_END)));
 
-        // Reserve area for the input
+        // Reserve area for the harness input place
         const INPUT_START: u64 = 0x22000;
         const INPUT_SIZE: u64 = 0x1000;
-
         orig_vm.mmap(INPUT_START, INPUT_SIZE as usize, PagePermissions::READ)
             .expect("Could not allocate input memory");
 
@@ -126,18 +126,23 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // Decode the encoded input to text javascript
             let mut input_buffer = [0u8; (INPUT_SIZE - 1) as usize];
-            let mut token_writer = BufWriter::new(&mut input_buffer[..]);
+            let mut token_writer = BufWriter::new(input_buffer.as_mut());
 
             // TODO: Use a BytesInput of u16 instead of u8
             for chunk in input.bytes().chunks_exact(2) {
+                // Compute token index
                 let token_index: u16 = chunk[0] as u16 | ((chunk[1] as u16) << 8);
+
+                // Get the token str representation
                 let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
+
+                // Write token to memory
                 token_writer.write(token_str.as_bytes())
                             .expect("Failed to write token");
             }
 
+            // Set Vm registers
             let js_input = token_writer.buffer();
-
             vm.set_reg(Register::Rsi, INPUT_START);
             vm.set_reg(Register::Rdx, js_input.len() as u64);
 
@@ -150,13 +155,13 @@ pub fn fuzz(config: FuzzerConfig) {
             ExitKind::Ok
         };
 
-        // Setup libAFL
-        let observer = StdMapObserver::new("coverage", unsafe { &mut COVERAGE });
+        // Setup LibAFL
+        let cov_observer = StdMapObserver::new("coverage", unsafe { &mut COVERAGE });
         let time_observer = TimeObserver::new("time");
 
-        let feedback_state = MapFeedbackState::with_observer(&observer);
+        let feedback_state = MapFeedbackState::with_observer(&cov_observer);
         let feedback = feedback_or!(
-            MaxMapFeedback::new(&feedback_state, &observer),
+            MaxMapFeedback::new(&feedback_state, &cov_observer),
             TimeFeedback::new_with_observer(&time_observer)
         );
         let objective = CrashFeedback::new();
@@ -185,7 +190,7 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut executor = TartifletteExecutor::new(
             &orig_vm,
             Duration::from_millis(1000),
-            tuple_list!(observer, time_observer),
+            tuple_list!(cov_observer, time_observer),
             &mut harness
         ).expect("Could not create executor");
 

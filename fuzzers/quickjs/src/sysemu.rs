@@ -1,5 +1,5 @@
-use tartiflette_vm::{Vm, Register};
 use std::convert::From;
+use tartiflette_vm::{Register, Vm};
 
 /// Linux syscall emulation state
 pub struct SysEmu {
@@ -8,7 +8,7 @@ pub struct SysEmu {
     /// End address of the mmap area
     mmap_end: u64,
     /// Current address in the mmap are
-    mmap_current: u64
+    mmap_current: u64,
 }
 
 /// Supported linux syscalls
@@ -17,7 +17,7 @@ enum Syscall {
     Munmap,
     Ioctl,
     ExitGroup,
-    Unknown
+    Unknown,
 }
 
 impl From<u64> for Syscall {
@@ -27,7 +27,7 @@ impl From<u64> for Syscall {
             11 => Syscall::Munmap,
             16 => Syscall::Ioctl,
             231 => Syscall::ExitGroup,
-            _ => Syscall::Unknown
+            _ => Syscall::Unknown,
         }
     }
 }
@@ -38,7 +38,7 @@ impl SysEmu {
         SysEmu {
             mmap_start: start,
             mmap_end: end,
-            mmap_current: start
+            mmap_current: start,
         }
     }
 

@@ -233,6 +233,24 @@ where
     I: Input,
     OT: ObserversTuple<I, S>
 {
+    pub fn new(vm: &Vm, timeout: Duration, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
+        assert!(timeout >= Duration::from_secs(1), "Timeout must at least be 1 second");
+
+        Ok(TartifletteExecutor {
+            harness_fn: harness,
+            observers,
+            exec_vm: vm.clone(),
+            reset_vm: vm.clone(),
+            hooks: Default::default(),
+            syscall_hook: None,
+            coverage: Default::default(),
+            coverage_hook: None,
+            orig_bytes: Default::default(),
+            timeout_duration: timeout,
+            phantom: PhantomData::<(I, S)>
+        })
+    }
+
     /// Adds a coverage point to the executor
     pub fn add_coverage(&mut self, address: u64) -> Result<(), ExecutorError> {
         // Check that the spot is not already instrumented
@@ -265,9 +283,8 @@ where
             return Err(ExecutorError::VmError("Coverage already installed at this address"));
         }
 
-        let mut orig_byte: [u8; 1] = [0; 1];
-
         // Read original byte
+        let mut orig_byte: [u8; 1] = [0; 1];
         self.exec_vm.read(address, &mut orig_byte)
             .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
 
@@ -284,11 +301,13 @@ where
     }
 
     /// Adds a syscall handling callback to the executor
+    #[inline]
     pub fn add_syscall_hook(&mut self, hook: &'a mut TartifletteHook) {
         self.syscall_hook = Some(hook);
     }
 
     /// Adds a hook to the executor that is called each time there is new coverage
+    #[inline]
     pub fn add_coverage_hook(&mut self, hook: &'a mut CoverageHook) {
         self.coverage_hook = Some(hook);
     }
@@ -308,30 +327,5 @@ where
     #[inline]
     fn observers_mut(&mut self) -> &mut OT {
         &mut self.observers
-    }
-}
-
-impl<'a, H, I, OT, S> TartifletteExecutor<'a, H, I, OT, S>
-where
-    H: FnMut(&mut Vm, &I) -> ExitKind,
-    I: Input,
-    OT: ObserversTuple<I, S>
-{
-    pub fn new(vm: &Vm, timeout: Duration, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
-        assert!(timeout >= Duration::from_secs(1), "Timeout must at least be 1 second");
-
-        Ok(TartifletteExecutor {
-            harness_fn: harness,
-            observers,
-            exec_vm: vm.clone(),
-            reset_vm: vm.clone(),
-            hooks: Default::default(),
-            syscall_hook: None,
-            coverage: Default::default(),
-            coverage_hook: None,
-            orig_bytes: Default::default(),
-            timeout_duration: timeout,
-            phantom: PhantomData::<(I, S)>
-        })
     }
 }
