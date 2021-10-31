@@ -132,7 +132,8 @@ pub fn fuzz(config: FuzzerConfig) {
             for chunk in input.bytes().chunks_exact(2) {
                 let token_index: u16 = chunk[0] as u16 | ((chunk[1] as u16) << 8);
                 let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
-                token_writer.write(token_str.as_bytes());
+                token_writer.write(token_str.as_bytes())
+                            .expect("Failed to write token");
             }
 
             let js_input = token_writer.buffer();

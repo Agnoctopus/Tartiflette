@@ -19,17 +19,15 @@ extern "C" fn alarm_handler(_: i32) {
 }
 
 pub fn install_alarm_handler() {
-    unsafe {
-        let action = SigAction::new(
-            SigHandler::Handler(alarm_handler),
-            SaFlags::empty(),
-            SigSet::empty()
-        );
+    let action = SigAction::new(
+        SigHandler::Handler(alarm_handler),
+        SaFlags::empty(),
+        SigSet::empty()
+    );
 
-        sigaction(
-            Signal::SIGALRM,
-            &action
-        );
+    unsafe {
+        sigaction(Signal::SIGALRM, &action)
+        .expect("Failed to setup SIGALRM handler");
     }
 }
 
