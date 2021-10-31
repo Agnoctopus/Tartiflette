@@ -29,6 +29,8 @@ pub enum MemoryError {
     PhysReadOutOfBounds(u64, usize),
     /// Physical out of bound access on a write at the `address` of `size`
     PhysWriteOutOfBounds(u64, usize),
+    /// An integer overflow occured
+    IntegerOverflow,
 }
 
 impl fmt::Display for MemoryError {
@@ -56,6 +58,9 @@ impl fmt::Display for MemoryError {
             MemoryError::AddressUnmapped(addr) => {
                 write!(f, "Trying to access unmapped address: 0x{:x}", addr)
             }
+            MemoryError::IntegerOverflow => {
+                write!(f, "An integer overflow occured")
+            }
         }
     }
 }
@@ -69,6 +74,7 @@ impl error::Error for MemoryError {
             MemoryError::PhysReadOutOfBounds(_, _) => "Physical read out of bounds",
             MemoryError::PhysWriteOutOfBounds(_, _) => "Physical write out of bounds",
             MemoryError::AddressUnmapped(_) => "Tried to access unmapped memory",
+            MemoryError::IntegerOverflow => "An integer overflow occured",
         }
     }
 }

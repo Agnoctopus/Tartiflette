@@ -1,6 +1,6 @@
 use crate::bits::BitField;
 use crate::memory::{Mapping, MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
-use crate::snapshot::{SnapshotError, SnapshotInfo};
+use crate::snapshot::{SnapshotError, SnapshotInfo, SnapshotRegisters};
 use crate::x64::{
     ExceptionFrame, ExceptionType, IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss,
     TssEntry,
@@ -173,8 +173,8 @@ const IA32_FS_BASE: u32 = 0xC0000100;
 const IA32_GS_BASE: u32 = 0xC0000101;
 
 impl Vm {
-    /// Creates a vm with a given memory size (the size will be aligned to
-    /// the nearest page multiple).
+    /// Creates a new `Vm` instance with a given memory size
+    /// (the size will be aligned to the nearest page multiple).
     pub fn new(memory_size: usize) -> Result<Vm> {
         // Create minimal vm
         let mut vm = Vm::setup_barebones(memory_size)?;
@@ -188,12 +188,13 @@ impl Vm {
         Ok(vm)
     }
 
-    /// Sets up a minimal vm (kvm init + memory + sregs)
+    /// Sets up a minimal working vm environnement.
+    /// (kvm init + memory + sregs)
     fn setup_barebones(memory_size: usize) -> Result<Vm> {
         // 1 - Allocate the memory
         let vm_memory = VirtualMemory::new(memory_size)?;
 
-        // 2 - Create the Kvm handles and setup guest memory
+        // 2 - Create the Kvm handles
         let kvm_fd = Kvm::new().map_err(|_| VmError::HvError("Could not open kvm device"))?;
         let vm_fd = kvm_fd
             .create_vm()
@@ -202,22 +203,26 @@ impl Vm {
             .create_vcpu(0)
             .map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
 
+        // 3 - Setup guest memory
         unsafe {
+            let region = kvm_userspace_memory_region {
+                slot: 0,
+                guest_phys_addr: 0,
+                memory_size: vm_memory.host_memory_size() as u64,
+                userspace_addr: vm_memory.host_address(),
+                flags: KVM_MEM_LOG_DIRTY_PAGES,
+            };
             vm_fd
-                .set_user_memory_region(kvm_userspace_memory_region {
-                    slot: 0,
-                    guest_phys_addr: 0,
-                    memory_size: vm_memory.host_memory_size() as u64,
-                    userspace_addr: vm_memory.host_address(),
-                    flags: KVM_MEM_LOG_DIRTY_PAGES,
-                })
+                .set_user_memory_region(region)
                 .map_err(|_| VmError::HvError("Could not set memory region for guest"))?
         }
 
+        // Get special registers
         let sregs = vcpu_fd
             .get_sregs()
             .map_err(|_| VmError::HvError("Could not get special registers"))?;
 
+        // Construct the new `VM` object
         Ok(Vm {
             _kvm: kvm_fd,
             kvm_vm: vm_fd,
@@ -465,6 +470,7 @@ impl Vm {
     }
 
     /// Maps memory with given permissions in the vm address space
+    #[inline]
     pub fn mmap(&mut self, vaddr: u64, size: usize, perms: PagePermissions) -> Result<()> {
         self.memory
             .mmap(vaddr, size, perms)
@@ -472,11 +478,13 @@ impl Vm {
     }
 
     /// Writes given data to the vm memory
+    #[inline]
     pub fn write(&mut self, vaddr: u64, data: &[u8]) -> Result<()> {
         self.memory.write(vaddr, data).map_err(VmError::MemoryError)
     }
 
     /// Writes a value to the vm memory
+    #[inline]
     pub fn write_value<T>(&mut self, address: u64, val: T) -> Result<()> {
         self.memory
             .write_val::<T>(address, val)
@@ -484,21 +492,25 @@ impl Vm {
     }
 
     /// Reads data from the given vm memory
+    #[inline]
     pub fn read(&self, vaddr: u64, data: &mut [u8]) -> Result<()> {
         self.memory.read(vaddr, data).map_err(VmError::MemoryError)
     }
 
     /// Returns an iterator over all mappings
+    #[inline]
     pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         self.memory.mappings()
     }
 
     /// Returns an iterator over all dirty mappings
+    #[inline]
     pub fn dirty_mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         self.mappings().filter(|m| m.dirty)
     }
 
     /// Clear dirty mappings status
+    #[inline]
     pub fn clear_dirty_mappings(&mut self) {
         for (_, pte) in self.memory.raw_pages_mut() {
             pte.set_dirty(false);
@@ -667,27 +679,57 @@ impl Vm {
         Ok(result)
     }
 
+    // Set `VM` registers from a `SnapshotRegisters` instance
+    #[inline]
+    pub fn set_regs_snapshot(&mut self, regs: &SnapshotRegisters) {
+        self.set_reg(Register::Rax, regs.rax);
+        self.set_reg(Register::Rbx, regs.rbx);
+        self.set_reg(Register::Rcx, regs.rcx);
+        self.set_reg(Register::Rdx, regs.rdx);
+        self.set_reg(Register::Rsi, regs.rsi);
+        self.set_reg(Register::Rdi, regs.rdi);
+        self.set_reg(Register::Rsp, regs.rsp);
+        self.set_reg(Register::Rbp, regs.rbp);
+        self.set_reg(Register::R8, regs.r8);
+        self.set_reg(Register::R9, regs.r9);
+        self.set_reg(Register::R10, regs.r10);
+        self.set_reg(Register::R11, regs.r11);
+        self.set_reg(Register::R12, regs.r12);
+        self.set_reg(Register::R13, regs.r13);
+        self.set_reg(Register::R14, regs.r14);
+        self.set_reg(Register::R15, regs.r15);
+        self.set_reg(Register::Rip, regs.rip);
+        self.set_reg(Register::Rflags, regs.rflags);
+        self.set_reg(Register::FsBase, regs.fs_base);
+        self.set_reg(Register::GsBase, regs.gs_base);
+    }
+
     /// Loads a vm state from snapshot files
     pub fn from_snapshot<T: AsRef<Path>>(
         snapshot_info: T,
         memory_dump: T,
         memory_size: usize,
     ) -> Result<Vm> {
+        // Create a new VN instance
         let mut vm = Vm::new(memory_size)?;
 
+        // Get the snapshot information
         let info = SnapshotInfo::from_file(snapshot_info)?;
 
         // Loading the mappings
         let mut dump = File::open(memory_dump)?;
         let mut buf: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
+        // Loop through mapping
         for mapping in info.mappings {
             assert!(mapping.start < mapping.end, "mapping.start > mapping.end");
 
+            // Create the mapping
             let mapping_size = (mapping.end - mapping.start) as usize;
             vm.mmap(mapping.start, mapping_size, mapping.permissions)?;
 
             // TODO: Implement more efficient copy to memory
+            // Loop through each page of the mapping and copy it
             for off in (0..mapping_size).step_by(PAGE_SIZE) {
                 dump.seek(SeekFrom::Start(mapping.physical_offset + off as u64))?;
                 dump.read(&mut buf)?;
@@ -695,27 +737,8 @@ impl Vm {
             }
         }
 
-        // Load the registers
-        vm.set_reg(Register::Rax, info.registers.rax);
-        vm.set_reg(Register::Rbx, info.registers.rbx);
-        vm.set_reg(Register::Rcx, info.registers.rcx);
-        vm.set_reg(Register::Rdx, info.registers.rdx);
-        vm.set_reg(Register::Rsi, info.registers.rsi);
-        vm.set_reg(Register::Rdi, info.registers.rdi);
-        vm.set_reg(Register::Rsp, info.registers.rsp);
-        vm.set_reg(Register::Rbp, info.registers.rbp);
-        vm.set_reg(Register::R8, info.registers.r8);
-        vm.set_reg(Register::R9, info.registers.r9);
-        vm.set_reg(Register::R10, info.registers.r10);
-        vm.set_reg(Register::R11, info.registers.r11);
-        vm.set_reg(Register::R12, info.registers.r12);
-        vm.set_reg(Register::R13, info.registers.r13);
-        vm.set_reg(Register::R14, info.registers.r14);
-        vm.set_reg(Register::R15, info.registers.r15);
-        vm.set_reg(Register::Rip, info.registers.rip);
-        vm.set_reg(Register::Rflags, info.registers.rflags);
-        vm.set_reg(Register::FsBase, info.registers.fs_base);
-        vm.set_reg(Register::GsBase, info.registers.gs_base);
+        // Load all the registers
+        vm.set_regs_snapshot(&info.registers);
 
         Ok(vm)
     }
