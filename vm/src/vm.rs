@@ -1,13 +1,19 @@
-use std::path::Path;
-use std::fs::File;
-use std::io::{Seek, SeekFrom, Read};
-use kvm_bindings::{kvm_regs, kvm_sregs, kvm_segment, kvm_userspace_memory_region, kvm_guest_debug, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES, Msrs, kvm_msr_entry};
-use kvm_ioctls::{Kvm, VmFd, VcpuFd, VcpuExit};
-use nix::errno::Errno;
 use crate::bits::BitField;
-use crate::memory::{VirtualMemory, MemoryError, PagePermissions, Mapping, PAGE_SIZE};
-use crate::x64::{Tss, TssEntry, PrivilegeLevel, IdtEntry, IdtEntryType, IdtEntryBuilder, ExceptionFrame, ExceptionType};
-use crate::snapshot::{SnapshotInfo, SnapshotError};
+use crate::memory::{Mapping, MemoryError, PagePermissions, VirtualMemory, PAGE_SIZE};
+use crate::snapshot::{SnapshotError, SnapshotInfo};
+use crate::x64::{
+    ExceptionFrame, ExceptionType, IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss,
+    TssEntry,
+};
+use kvm_bindings::{
+    kvm_guest_debug, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, kvm_userspace_memory_region,
+    Msrs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES,
+};
+use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
+use nix::errno::Errno;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, VmError>;
 
@@ -19,7 +25,7 @@ pub enum VmError {
     /// Error during snapshot loading
     SnapshotError(SnapshotError),
     /// Hypervisor error
-    HvError(&'static str)
+    HvError(&'static str),
 }
 
 impl From<MemoryError> for VmError {
@@ -43,26 +49,46 @@ impl From<SnapshotError> for VmError {
 /// List of available registers
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Register {
+    /// RAX
     Rax,
+    /// RBX
     Rbx,
+    /// RCX
     Rcx,
+    /// RDX
     Rdx,
+    /// RSI
     Rsi,
+    /// RDI
     Rdi,
+    /// RSP
     Rsp,
+    /// RBP
     Rbp,
+    /// R8
     R8,
+    /// R9
     R9,
+    /// R10
     R10,
+    /// R11
     R11,
+    /// R12
     R12,
+    /// R13
     R13,
+    /// R14
     R14,
+    /// R15
     R15,
+    /// RIP
     Rip,
+    /// RFLAGS
     Rflags,
+    /// FS BASE
     FsBase,
-    GsBase
+    /// GS BASE
+    GsBase,
 }
 
 /// Additional details behind a PageFault exception
@@ -118,7 +144,7 @@ pub enum VmExit {
     /// Vm stopped on a syscall instruction
     Syscall,
     /// Vmexit unhandled by tartiflette
-    Unhandled
+    Unhandled,
 }
 
 /// Tartiflette vm state
@@ -140,7 +166,7 @@ pub struct Vm {
     /// Starting address of the hypercall region
     hypercall_page: u64,
     /// VM Memory
-    memory: VirtualMemory
+    memory: VirtualMemory,
 }
 
 const IA32_FS_BASE: u32 = 0xC0000100;
@@ -169,20 +195,27 @@ impl Vm {
 
         // 2 - Create the Kvm handles and setup guest memory
         let kvm_fd = Kvm::new().map_err(|_| VmError::HvError("Could not open kvm device"))?;
-        let vm_fd = kvm_fd.create_vm().map_err(|_| VmError::HvError("Could not create vm fd"))?;
-        let vcpu_fd = vm_fd.create_vcpu(0).map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
+        let vm_fd = kvm_fd
+            .create_vm()
+            .map_err(|_| VmError::HvError("Could not create vm fd"))?;
+        let vcpu_fd = vm_fd
+            .create_vcpu(0)
+            .map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
 
         unsafe {
-            vm_fd.set_user_memory_region(kvm_userspace_memory_region {
-                slot: 0,
-                guest_phys_addr: 0,
-                memory_size: vm_memory.host_memory_size() as u64,
-                userspace_addr: vm_memory.host_address(),
-                flags: KVM_MEM_LOG_DIRTY_PAGES
-            }).map_err(|_| VmError::HvError("Could not set memory region for guest"))?
+            vm_fd
+                .set_user_memory_region(kvm_userspace_memory_region {
+                    slot: 0,
+                    guest_phys_addr: 0,
+                    memory_size: vm_memory.host_memory_size() as u64,
+                    userspace_addr: vm_memory.host_address(),
+                    flags: KVM_MEM_LOG_DIRTY_PAGES,
+                })
+                .map_err(|_| VmError::HvError("Could not set memory region for guest"))?
         }
 
-        let sregs = vcpu_fd.get_sregs()
+        let sregs = vcpu_fd
+            .get_sregs()
             .map_err(|_| VmError::HvError("Could not get special registers"))?;
 
         Ok(Vm {
@@ -194,7 +227,7 @@ impl Vm {
             memory: vm_memory,
             hypercall_page: 0,
             fs_base: 0,
-            gs_base: 0
+            gs_base: 0,
         })
     }
 
@@ -253,7 +286,8 @@ impl Vm {
         self.special_registers.cr3 = self.memory.page_directory() as u64;
 
         // Set tss
-        self.kvm_vm.set_tss_address(0xfffb_d000)
+        self.kvm_vm
+            .set_tss_address(0xfffb_d000)
             .map_err(|_| VmError::HvError("Could not set tss address"))?;
 
         // Enable vm exit on software breakpoints
@@ -263,7 +297,8 @@ impl Vm {
             arch: Default::default(),
         };
 
-        self.kvm_vcpu.set_guest_debug(&dregs)
+        self.kvm_vcpu
+            .set_guest_debug(&dregs)
             .map_err(|_| VmError::HvError("Could not set debug registers"))?;
 
         Ok(())
@@ -284,24 +319,26 @@ impl Vm {
         self.memory.mmap(
             GDT_ADDRESS,
             PAGE_SIZE,
-            PagePermissions::READ | PagePermissions::WRITE
+            PagePermissions::READ | PagePermissions::WRITE,
         )?;
 
         // Setting up segments
         self.memory.write_val(GDT_ADDRESS, 0u64)?; // Null
-        self.memory.write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?; // Code
+        self.memory
+            .write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?; // Code
 
         // TSS GDT entry
         self.memory.write_val(
             GDT_ADDRESS + 16,
-            TssEntry::new(TSS_ADDRESS, PrivilegeLevel::Ring0)
+            TssEntry::new(TSS_ADDRESS, PrivilegeLevel::Ring0),
         )?;
 
         // TSS structure
         let mut tss = Tss::new();
         tss.set_ist(1, STACK_ADDRESS + (STACK_SIZE - 0x100) as u64);
 
-        self.memory.mmap(TSS_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
+        self.memory
+            .mmap(TSS_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
         self.memory.write_val(TSS_ADDRESS, tss)?;
 
         // Set the tr register to the tss
@@ -325,7 +362,7 @@ impl Vm {
         self.memory.mmap(
             IDT_HANDLERS,
             PAGE_SIZE,
-            PagePermissions::READ | PagePermissions::EXECUTE
+            PagePermissions::READ | PagePermissions::EXECUTE,
         )?;
 
         self.hypercall_page = IDT_HANDLERS;
@@ -333,18 +370,15 @@ impl Vm {
         for i in 0..32 {
             let handler_code: &[u8] = &[
                 0x6a, i as u8, // push <exception index>
-                0xf4,          // hlt -> our hypercall
+                0xf4,    // hlt -> our hypercall
             ];
 
             self.memory.write(IDT_HANDLERS + (i * 32), handler_code)?;
         }
 
         // Setting up the IDT
-        self.memory.mmap(
-            IDT_ADDRESS,
-            PAGE_SIZE,
-            PagePermissions::READ
-        )?;
+        self.memory
+            .mmap(IDT_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
 
         let mut entries = [IdtEntry::new(); 32];
         let entries_size = entries.len() * std::mem::size_of::<IdtEntry>();
@@ -370,7 +404,7 @@ impl Vm {
         self.memory.mmap(
             STACK_ADDRESS,
             STACK_SIZE,
-            PagePermissions::READ | PagePermissions::WRITE
+            PagePermissions::READ | PagePermissions::WRITE,
         )?;
 
         Ok(())
@@ -388,8 +422,8 @@ impl Vm {
             Register::Rdi => self.registers.rdi,
             Register::Rsp => self.registers.rsp,
             Register::Rbp => self.registers.rbp,
-            Register::R8  => self.registers.r8,
-            Register::R9  => self.registers.r9,
+            Register::R8 => self.registers.r8,
+            Register::R9 => self.registers.r9,
             Register::R10 => self.registers.r10,
             Register::R11 => self.registers.r11,
             Register::R12 => self.registers.r12,
@@ -399,7 +433,7 @@ impl Vm {
             Register::Rip => self.registers.rip,
             Register::Rflags => self.registers.rflags,
             Register::FsBase => self.fs_base,
-            Register::GsBase => self.gs_base
+            Register::GsBase => self.gs_base,
         }
     }
 
@@ -415,8 +449,8 @@ impl Vm {
             Register::Rdi => self.registers.rdi = regval,
             Register::Rsp => self.registers.rsp = regval,
             Register::Rbp => self.registers.rbp = regval,
-            Register::R8  => self.registers.r8 = regval,
-            Register::R9  => self.registers.r9 = regval,
+            Register::R8 => self.registers.r8 = regval,
+            Register::R9 => self.registers.r9 = regval,
             Register::R10 => self.registers.r10 = regval,
             Register::R11 => self.registers.r11 = regval,
             Register::R12 => self.registers.r12 = regval,
@@ -426,36 +460,41 @@ impl Vm {
             Register::Rip => self.registers.rip = regval,
             Register::Rflags => self.registers.rflags = regval,
             Register::FsBase => self.fs_base = regval,
-            Register::GsBase => self.gs_base = regval
+            Register::GsBase => self.gs_base = regval,
         }
     }
 
-    /// Maps memory with given permissions in the vm address space.
+    /// Maps memory with given permissions in the vm address space
     pub fn mmap(&mut self, vaddr: u64, size: usize, perms: PagePermissions) -> Result<()> {
-        self.memory.mmap(vaddr, size, perms).map_err(VmError::MemoryError)
+        self.memory
+            .mmap(vaddr, size, perms)
+            .map_err(VmError::MemoryError)
     }
 
-    /// Writes to given data to the vm memory.
+    /// Writes given data to the vm memory
     pub fn write(&mut self, vaddr: u64, data: &[u8]) -> Result<()> {
         self.memory.write(vaddr, data).map_err(VmError::MemoryError)
     }
 
+    /// Writes a value to the vm memory
     pub fn write_value<T>(&mut self, address: u64, val: T) -> Result<()> {
-        self.memory.write_val::<T>(address, val).map_err(VmError::MemoryError)
+        self.memory
+            .write_val::<T>(address, val)
+            .map_err(VmError::MemoryError)
     }
 
-    /// Reads data from the given vm memory.
+    /// Reads data from the given vm memory
     pub fn read(&self, vaddr: u64, data: &mut [u8]) -> Result<()> {
         self.memory.read(vaddr, data).map_err(VmError::MemoryError)
     }
 
     /// Returns an iterator over all mappings
-    pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
+    pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         self.memory.mappings()
     }
 
     /// Returns an iterator over all dirty mappings
-    pub fn dirty_mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
+    pub fn dirty_mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         self.mappings().filter(|m| m.dirty)
     }
 
@@ -470,9 +509,11 @@ impl Vm {
     fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
         self.registers.rflags |= 1 << 1;
-        self.kvm_vcpu.set_regs(&self.registers)
+        self.kvm_vcpu
+            .set_regs(&self.registers)
             .map_err(|_| VmError::HvError("Could not commit registers"))?;
-        self.kvm_vcpu.set_sregs(&self.special_registers)
+        self.kvm_vcpu
+            .set_sregs(&self.special_registers)
             .map_err(|_| VmError::HvError("Could not commit special registers"))?;
 
         // gs_base and fs_base need to go through msrs
@@ -489,12 +530,15 @@ impl Vm {
             },
         ]);
 
-        self.kvm_vcpu.set_msrs(&msrs)
+        self.kvm_vcpu
+            .set_msrs(&msrs)
             .map_err(|_| VmError::HvError("Could not commit fsbase and gsbase"))?;
 
         Ok(())
     }
 
+    /// Run the `VM` instance until the first `VM` that cannot be
+    /// handled directly
     pub fn run(&mut self) -> Result<VmExit> {
         let result = loop {
             self.commit_registers()?;
@@ -502,9 +546,13 @@ impl Vm {
             let exit = self.kvm_vcpu.run();
 
             // Synchronize normal registers
-            self.registers = self.kvm_vcpu.get_regs()
+            self.registers = self
+                .kvm_vcpu
+                .get_regs()
                 .map_err(|_| VmError::HvError("Could not get registers"))?;
-            self.special_registers = self.kvm_vcpu.get_sregs()
+            self.special_registers = self
+                .kvm_vcpu
+                .get_sregs()
                 .map_err(|_| VmError::HvError("Could not get special registers"))?;
 
             // Synchronize fs_base and gs_base
@@ -519,7 +567,9 @@ impl Vm {
                 },
             ]);
 
-            let count = self.kvm_vcpu.get_msrs(&mut msrs)
+            let count = self
+                .kvm_vcpu
+                .get_msrs(&mut msrs)
                 .map_err(|_| VmError::HvError("Could not read fs_base and gs_base"))?;
 
             assert_eq!(count, 2, "Invalid number of msrs returned");
@@ -532,19 +582,18 @@ impl Vm {
             if let Err(err) = exit {
                 match Errno::from_i32(err.errno()) {
                     Errno::EINTR | Errno::EAGAIN => break VmExit::Interrupted,
-                    _ => return Err(VmError::HvError("Unexpected errno in KVM_RUN"))
+                    _ => return Err(VmError::HvError("Unexpected errno in KVM_RUN")),
                 }
             }
 
             match exit.unwrap() {
-                VcpuExit::Debug => {
-                    break VmExit::Breakpoint
-                }
+                VcpuExit::Debug => break VmExit::Breakpoint,
                 VcpuExit::Hlt => {
                     // If code is outside of hypercall region, we forward the hlt
                     if (self.registers.rip < self.hypercall_page)
-                        || (self.registers.rip >= self.hypercall_page + PAGE_SIZE as u64) {
-                            break VmExit::Hlt
+                        || (self.registers.rip >= self.hypercall_page + PAGE_SIZE as u64)
+                    {
+                        break VmExit::Hlt;
                     }
 
                     // If we are within the hypercall region we handle the
@@ -552,16 +601,17 @@ impl Vm {
                     let exception_code: u64 = self.memory.read_val(self.registers.rsp)?;
 
                     let error_code: Option<u64> = match ExceptionType::from(exception_code) {
-                        ExceptionType::DoubleFault |
-                        ExceptionType::InvalidTSS  |
-                        ExceptionType::SegmentNotPresent |
-                        ExceptionType::StackFault |
-                        ExceptionType::GeneralProtection |
-                        ExceptionType::PageFault |
-                        ExceptionType::AlignmentCheck |
-                        ExceptionType::ControlProtection
-                        => Some(self.memory.read_val(self.registers.rsp + 8)?),
-                        _ => None
+                        ExceptionType::DoubleFault
+                        | ExceptionType::InvalidTSS
+                        | ExceptionType::SegmentNotPresent
+                        | ExceptionType::StackFault
+                        | ExceptionType::GeneralProtection
+                        | ExceptionType::PageFault
+                        | ExceptionType::AlignmentCheck
+                        | ExceptionType::ControlProtection => {
+                            Some(self.memory.read_val(self.registers.rsp + 8)?)
+                        }
+                        _ => None,
                     };
 
                     let exception_frame: ExceptionFrame = if error_code.is_some() {
@@ -578,9 +628,9 @@ impl Vm {
                         ExceptionType::PageFault => {
                             break VmExit::PageFault(PageFaultDetail {
                                 status: error_code.unwrap() as u32,
-                                address: self.special_registers.cr2
+                                address: self.special_registers.cr2,
                             });
-                        },
+                        }
                         ExceptionType::InvalidOpcode => {
                             // As IA32_EFER.SCE is not enabled, a syscall instruction will trigger
                             // a #UD exception. We cannot enable the SCE bit in EFER as it would
@@ -591,7 +641,11 @@ impl Vm {
                             // and return with a special `Syscall` VmExit.
                             let mut code_bytes: [u8; 2] = [0; 2];
 
-                            if self.memory.read(self.registers.rip, &mut code_bytes).is_ok() {
+                            if self
+                                .memory
+                                .read(self.registers.rip, &mut code_bytes)
+                                .is_ok()
+                            {
                                 //  0f 05 -> syscall
                                 if code_bytes == [0x0f, 0x05] {
                                     // We advance rip by two bytes to move over the syscall
@@ -603,10 +657,10 @@ impl Vm {
 
                             break VmExit::InvalidInstruction;
                         }
-                        _ => break VmExit::Exception(exception_code)
+                        _ => break VmExit::Exception(exception_code),
                     }
                 }
-                _ => break VmExit::Unhandled
+                _ => break VmExit::Unhandled,
             }
         };
 
@@ -614,7 +668,11 @@ impl Vm {
     }
 
     /// Loads a vm state from snapshot files
-    pub fn from_snapshot<T: AsRef<Path>>(snapshot_info: T, memory_dump: T, memory_size: usize) -> Result<Vm> {
+    pub fn from_snapshot<T: AsRef<Path>>(
+        snapshot_info: T,
+        memory_dump: T,
+        memory_size: usize,
+    ) -> Result<Vm> {
         let mut vm = Vm::new(memory_size)?;
 
         let info = SnapshotInfo::from_file(snapshot_info)?;
@@ -662,6 +720,7 @@ impl Vm {
         Ok(vm)
     }
 
+    /// Reset the `VM` state from an other one
     pub fn reset(&mut self, other: &Vm) {
         // Reset registers
         self.registers = other.registers;
@@ -672,9 +731,15 @@ impl Vm {
         // Reset memory state
         // Here we prefer aborting as if you are resetting a vm with a completely different one you
         // are doing something extremely wrong.
-        assert_eq!(self.memory.host_memory_size(), other.memory.host_memory_size(), "Vm memory mismatch");
+        assert_eq!(
+            self.memory.host_memory_size(),
+            other.memory.host_memory_size(),
+            "Vm memory mismatch"
+        );
 
-        let dirty_log = self.kvm_vm.get_dirty_log(0, self.memory.host_memory_size())
+        let dirty_log = self
+            .kvm_vm
+            .get_dirty_log(0, self.memory.host_memory_size())
             .expect("Could not get dirty log for current vm");
 
         for (bm_index, bm_entry) in dirty_log.iter().enumerate() {
@@ -684,9 +749,14 @@ impl Vm {
                 if (bm_entry >> i) & 1 == 1 {
                     let mut data: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
-                    other.memory.pmem.read(pa, &mut data)
+                    other
+                        .memory
+                        .pmem
+                        .read(pa, &mut data)
                         .expect("Could not read physical memory from source vm");
-                    self.memory.pmem.write(pa, &data)
+                    self.memory
+                        .pmem
+                        .write(pa, &data)
                         .expect("Could not restore page in dirty vm");
                 }
             }
@@ -696,8 +766,8 @@ impl Vm {
 
 impl Clone for Vm {
     fn clone(&self) -> Self {
-        let mut vm = Vm::new(self.memory.host_memory_size())
-            .expect("Could not create vm for clone");
+        let mut vm =
+            Vm::new(self.memory.host_memory_size()).expect("Could not create vm for clone");
 
         // Copy registers
         vm.registers = self.registers;
@@ -706,9 +776,14 @@ impl Clone for Vm {
         vm.gs_base = self.gs_base;
 
         // Copy memory
-        let orig_mem = self.memory.pmem.raw_slice(0, self.memory.host_memory_size())
+        let orig_mem = self
+            .memory
+            .pmem
+            .raw_slice(0, self.memory.host_memory_size())
             .expect("Could not get original physical memory");
-        vm.memory.pmem.write(0, &orig_mem)
+        vm.memory
+            .pmem
+            .write(0, &orig_mem)
             .expect("Could not set actual memory to original");
 
         vm
@@ -717,7 +792,7 @@ impl Clone for Vm {
 
 #[cfg(test)]
 mod tests {
-    use super::{Result, Vm, VmExit, Register};
+    use super::{Register, Result, Vm, VmExit};
     use crate::memory::{PagePermissions, PAGE_SIZE};
 
     #[test]
@@ -758,7 +833,7 @@ mod tests {
         // Simple shellcode
         let shellcode: &[u8] = &[
             0x48, 0x89, 0x10, // mov [rax], rdx
-            0xcc // int3
+            0xcc, // int3
         ];
 
         // Mapping the code
@@ -766,7 +841,11 @@ mod tests {
         vm.write(0x1337000, shellcode)?;
 
         // Mapping the target page of the write
-        vm.mmap(0xdeadb000, PAGE_SIZE, PagePermissions::READ | PagePermissions::WRITE)?;
+        vm.mmap(
+            0xdeadb000,
+            PAGE_SIZE,
+            PagePermissions::READ | PagePermissions::WRITE,
+        )?;
 
         // Set registers to known values
         vm.set_reg(Register::Rax, 0xdeadbeef);
@@ -820,7 +899,10 @@ mod tests {
         assert_eq!(vmexit, VmExit::Syscall);
 
         // Emulated syscall doing rax = rax + rdx
-        vm.set_reg(Register::Rax, vm.get_reg(Register::Rax) + vm.get_reg(Register::Rdx));
+        vm.set_reg(
+            Register::Rax,
+            vm.get_reg(Register::Rax) + vm.get_reg(Register::Rdx),
+        );
 
         let vmexit_end = vm.run()?;
 

@@ -1,9 +1,13 @@
-mod memory;
-mod bits;
-mod x64;
-mod vm;
-mod snapshot;
+//! Virtual Machine low-level management
 
-pub use vm::{Vm, VmError, VmExit, Register, PageFaultDetail};
+mod bits;
+mod memory;
+mod snapshot;
+mod vm;
+mod x64;
+
 pub use memory::{Mapping, PagePermissions};
-pub use snapshot::{SnapshotInfo, SnapshotError, SnapshotMapping, SnapshotRegisters, SnapshotModule};
+pub use snapshot::{
+    SnapshotError, SnapshotInfo, SnapshotMapping, SnapshotModule, SnapshotRegisters,
+};
+pub use vm::{PageFaultDetail, Register, Vm, VmError, VmExit};

@@ -1,6 +1,8 @@
 //! Virtual Memory Subsystem
 
-use super::paging::{FrameAllocator, PagePermissions, PageTable, PageTableEntry, VirtAddr, VirtRange};
+use super::paging::{
+    FrameAllocator, PagePermissions, PageTable, PageTableEntry, VirtAddr, VirtRange,
+};
 use super::phys::PhysicalMemory;
 use super::{MemoryError, Result, PAGE_SIZE};
 
@@ -196,18 +198,16 @@ impl VirtualMemory {
     }
 
     /// Returns an iterator over all mappings
-    pub fn mappings(&self) -> impl Iterator<Item=Mapping> + '_ {
-        PageIterator::new(&self).map(|(addr, page)| {
-            Mapping {
-                address: addr,
-                size: PAGE_SIZE,
-                dirty: page.dirty()
-            }
+    pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
+        PageIterator::new(&self).map(|(addr, page)| Mapping {
+            address: addr,
+            size: PAGE_SIZE,
+            dirty: page.dirty(),
         })
     }
 
     /// Returns a raw mutable Iterator over present PageTableEntries
-    pub fn raw_pages_mut(&mut self) -> impl Iterator<Item=(u64, &mut PageTableEntry)> + '_ {
+    pub fn raw_pages_mut(&mut self) -> impl Iterator<Item = (u64, &mut PageTableEntry)> + '_ {
         PageIteratorMut::new(self)
     }
 }
@@ -220,7 +220,7 @@ pub struct Mapping {
     /// Size of the page (here hardcoded to 4k)
     pub size: usize,
     /// Is mapping dirty
-    pub dirty: bool
+    pub dirty: bool,
 }
 
 /// Iterator over all page table entries inside VirtualMemory (immutable)
@@ -229,7 +229,7 @@ struct PageIterator<'a> {
     l3_index: usize,
     l2_index: usize,
     l1_index: usize,
-    memory: &'a VirtualMemory
+    memory: &'a VirtualMemory,
 }
 
 impl<'a> PageIterator<'a> {
@@ -239,12 +239,12 @@ impl<'a> PageIterator<'a> {
             l3_index: 0,
             l2_index: 0,
             l1_index: 0,
-            memory: mem
+            memory: mem,
         }
     }
 }
 
-impl <'a> Iterator for PageIterator<'a> {
+impl<'a> Iterator for PageIterator<'a> {
     type Item = (u64, &'a PageTableEntry);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -262,7 +262,7 @@ impl <'a> Iterator for PageIterator<'a> {
 
                                     if p1.entries[l1].present() {
                                         let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
-                                        return Some((vaddr.address(), &p1.entries[l1]))
+                                        return Some((vaddr.address(), &p1.entries[l1]));
                                     }
                                 }
                             }
@@ -288,7 +288,7 @@ struct PageIteratorMut<'a> {
     l3_index: usize,
     l2_index: usize,
     l1_index: usize,
-    memory: &'a mut VirtualMemory
+    memory: &'a mut VirtualMemory,
 }
 
 impl<'a> PageIteratorMut<'a> {
@@ -298,12 +298,12 @@ impl<'a> PageIteratorMut<'a> {
             l3_index: 0,
             l2_index: 0,
             l1_index: 0,
-            memory: mem
+            memory: mem,
         }
     }
 }
 
-impl <'a> Iterator for PageIteratorMut<'a> {
+impl<'a> Iterator for PageIteratorMut<'a> {
     type Item = (u64, &'a mut PageTableEntry);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -321,7 +321,7 @@ impl <'a> Iterator for PageIteratorMut<'a> {
 
                                     if p1.entries[l1].present() {
                                         let vaddr = VirtAddr::forge(l4, l3, l2, l1, 0);
-                                        return Some((vaddr.address(), &mut p1.entries[l1]))
+                                        return Some((vaddr.address(), &mut p1.entries[l1]));
                                     }
                                 }
                             }
