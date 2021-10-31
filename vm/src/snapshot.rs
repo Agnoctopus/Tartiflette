@@ -5,6 +5,25 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+/// Error during snapshot manipulation
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotError {
+    /// IO Error
+    IoError(String),
+    /// Parsing error
+    ParsingError(String),
+}
+
+impl From<std::io::Error> for SnapshotError {
+    fn from(err: std::io::Error) -> Self {
+        SnapshotError::IoError(err.to_string())
+    }
+}
+
+/// Result type in snapshot manipulation
+type Result<T> = std::result::Result<T, SnapshotError>;
+
+/// Parse an unsigned 64 bits number in hex form
 fn parse_u64<'de, D>(d: D) -> std::result::Result<u64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -13,6 +32,7 @@ where
     u64::from_str_radix(s, 16).map_err(D::Error::custom)
 }
 
+/// Parse permission in string form
 fn parse_perms<'de, D>(d: D) -> std::result::Result<PagePermissions, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -112,10 +132,14 @@ pub struct SnapshotMapping {
     pub image: Option<String>,
 }
 
+/// Snapshot raw information contained in JSON form
 #[derive(Deserialize)]
 struct SnapshotInfoRaw {
+    /// List of all memory mappings
     pub mappings: Vec<SnapshotMapping>,
+    /// Register state
     pub registers: SnapshotRegisters,
+    /// Map of symbols
     pub symbols: Option<BTreeMap<String, String>>,
 }
 
@@ -130,29 +154,12 @@ pub struct SnapshotModule {
     pub name: String,
 }
 
-/// Error during snapshot loading
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SnapshotError {
-    /// IO Error
-    IoError(String),
-    /// Parsing error
-    ParsingError(String),
-}
-
-impl From<std::io::Error> for SnapshotError {
-    fn from(err: std::io::Error) -> Self {
-        SnapshotError::IoError(err.to_string())
-    }
-}
-
-type Result<T> = std::result::Result<T, SnapshotError>;
-
 /// Tartiflette snapshot info
 #[derive(Debug)]
 pub struct SnapshotInfo {
     /// List of all memory mappings
     pub mappings: Vec<SnapshotMapping>,
-    /// Current register state
+    /// Register state
     pub registers: SnapshotRegisters,
     /// List of named code modules
     pub modules: BTreeMap<String, SnapshotModule>,
@@ -169,49 +176,63 @@ impl SnapshotInfo {
 
     /// Create a new `SnapshotInfo` from str data
     pub fn from_string<S: AsRef<str>>(data: S) -> Result<SnapshotInfo> {
+        // Get a `SnapshotInfoRaw` from parsing
         let info: SnapshotInfoRaw = serde_json::from_str(data.as_ref())
             .map_err(|e| SnapshotError::ParsingError(e.to_string()))?;
 
-        // Process the modules and symbols
+        // Process the symbols
         let mut symbols: BTreeMap<String, u64> = BTreeMap::new();
 
+        // Handle symbols if present
         if let Some(syms) = info.symbols {
+            // Loop through symbols
             for (k, v) in syms.iter() {
+                // Convert hex address into integer
                 let address = u64::from_str_radix(v, 16)
                     .map_err(|e| SnapshotError::ParsingError(e.to_string()))?;
 
+                // Add the symbol
                 symbols.insert(k.clone(), address);
             }
         }
 
+        // Process the modules
         let mut modules: BTreeMap<String, SnapshotModule> = BTreeMap::new();
 
+        // Loop through mappings
         for mapping in info.mappings.iter() {
             if let Some(module_path) = mapping.image.as_deref() {
-                // This should never crash
+                // Get the module name, equivalent ton path basename
                 let module_name = module_path.split("/").last().unwrap().to_string();
 
-                if let Some(module) = modules.get_mut(&module_name) {
-                    module.start = cmp::min(module.start, mapping.start);
-                    module.end = cmp::max(module.end, mapping.end);
-                } else {
-                    modules.insert(
-                        module_name.clone(),
-                        SnapshotModule {
-                            start: mapping.start,
-                            end: mapping.end,
-                            name: module_name,
-                        },
-                    );
+                // Handle module
+                match modules.get_mut(&module_name) {
+                    Some(module) => {
+                        // Update module mapping region
+                        module.start = cmp::min(module.start, mapping.start);
+                        module.end = cmp::max(module.end, mapping.end);
+                    }
+                    None => {
+                        // Add module
+                        modules.insert(
+                            module_name.clone(),
+                            SnapshotModule {
+                                start: mapping.start,
+                                end: mapping.end,
+                                name: module_name,
+                            },
+                        );
+                    }
                 }
             }
         }
 
+        // Return a new `SnapshotInfo`
         Ok(SnapshotInfo {
             mappings: info.mappings,
             registers: info.registers,
-            modules,
-            symbols,
+            modules: modules,
+            symbols: symbols,
         })
     }
 }

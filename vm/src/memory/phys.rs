@@ -23,6 +23,8 @@ impl PhysicalMemory {
     pub fn new(memory_size: usize) -> Result<Self> {
         // Align size
         let size = memory_size.align_power2(PAGE_SIZE);
+
+        // Mmap aligned requested size
         let raw_data = unsafe {
             mmap(
                 core::ptr::null_mut(),
@@ -55,32 +57,50 @@ impl PhysicalMemory {
     }
 
     /// Returns a slice covering an asked area
+    #[inline]
     pub fn raw_slice(&self, pa: usize, length: usize) -> Result<&[u8]> {
-        if pa + length > self.size() {
+        // Bound check access
+        let end = pa.checked_add(length).ok_or(MemoryError::IntegerOverflow)?;
+        if end > self.size() {
             return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
         }
+        if pa as isize > isize::MAX {
+            return Err(MemoryError::IntegerOverflow);
+        }
 
-        Ok(unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) })
+        // Get the slice
+        let slice =
+            unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), length) };
+
+        Ok(slice)
     }
 
     ///// Returns a mutable slice covering a requested area
-    //pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
-    //    if pa + length > self.size() {
-    //        return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
-    //    }
+    #[inline]
+    pub fn raw_slice_mut(&mut self, pa: usize, length: usize) -> Result<&mut [u8]> {
+        // Bound check access
+        let end = pa.checked_add(length).ok_or(MemoryError::IntegerOverflow)?;
+        if end > self.size() {
+            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, length));
+        }
+        if pa as isize > isize::MAX {
+            return Err(MemoryError::IntegerOverflow);
+        }
 
-    //    Ok(unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) })
-    //}
+        // Get the slice
+        let slice =
+            unsafe { std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), length) };
+
+        Ok(slice)
+    }
 
     /// Read bytes from an address
     #[inline]
     pub fn read(&self, pa: usize, output: &mut [u8]) -> Result<()> {
-        if pa + output.len() > self.size {
-            return Err(MemoryError::PhysReadOutOfBounds(pa as u64, output.len()));
-        }
+        // Get physical data slice
+        let pdata = self.raw_slice(pa, output.len())?;
 
-        let pdata =
-            unsafe { std::slice::from_raw_parts(self.raw_data.offset(pa as isize), output.len()) };
+        // Copy from
         output.copy_from_slice(pdata);
         Ok(())
     }
@@ -88,13 +108,10 @@ impl PhysicalMemory {
     /// Write bytes to an address
     #[inline]
     pub fn write(&mut self, pa: usize, input: &[u8]) -> Result<()> {
-        if pa + input.len() > self.size {
-            return Err(MemoryError::PhysWriteOutOfBounds(pa as u64, input.len()));
-        }
+        // Get physical data slice
+        let pdata = self.raw_slice_mut(pa, input.len())?;
 
-        let pdata = unsafe {
-            std::slice::from_raw_parts_mut(self.raw_data.offset(pa as isize), input.len())
-        };
+        // Copy to
         pdata.copy_from_slice(input);
         Ok(())
     }
@@ -102,27 +119,27 @@ impl PhysicalMemory {
 
 /// Bump allocator
 impl FrameAllocator for PhysicalMemory {
-    #[inline]
     /// Allocate a frame
+    #[inline]
     fn allocate_frame(&mut self) -> Option<usize> {
         if self.top >= self.size {
-            None
-        } else {
-            let address = self.top;
-
-            // Bump the heap top
-            self.top += PAGE_SIZE;
-
-            Some(address)
+            return None;
         }
+
+        // Bump the heap top and return the last top
+        let address = self.top;
+        self.top += PAGE_SIZE;
+        Some(address)
     }
 
-    #[inline]
     /// Deallocate a frame
-    fn deallocate_frame(&mut self, _frame_address: usize) {}
-
     #[inline]
+    fn deallocate_frame(&mut self, _frame_address: usize) {
+        // TODO free capable allocator
+    }
+
     // Translate a frame address to its virtual address
+    #[inline]
     fn translate(&self, frame_address: usize) -> usize {
         self.raw_data as usize + frame_address
     }
