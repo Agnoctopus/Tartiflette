@@ -440,7 +440,6 @@ impl VirtAddr {
         Self::new(virt_addr as u64)
     }
 
-
     /// Return the raw virtual address
     #[inline]
     pub fn address(&self) -> u64 {

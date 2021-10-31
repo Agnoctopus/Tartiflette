@@ -7,7 +7,7 @@ mod phys;
 mod virt;
 
 pub use paging::{PagePermissions, PAGE_SIZE};
-pub use virt::{VirtualMemory, Mapping};
+pub use virt::{Mapping, VirtualMemory};
 
 use std::{error, fmt};
 
