@@ -1,7 +1,6 @@
+function fuzz() {
 var buffer, a, i, str;
 a = new Uint8Array(4);
-for(i = 0; i < a.length; i++)
-    a[i] = i;
 a[0] = -1;
 a = new Int8Array(3);
 a[0] = 255;
@@ -23,3 +22,6 @@ a = new Uint8Array(buffer);
 str = a.toString();
 a = new Uint8Array([1, 2, 3, 4]);
 a.set([10, 11], 2);
+}
+
+fuzz();

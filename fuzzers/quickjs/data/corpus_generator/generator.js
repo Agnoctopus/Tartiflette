@@ -66,9 +66,11 @@ function normalizeCode(code) {
         }
     );
 
+    const obf_code = obf_result.getObfuscatedCode();
+
     var result = {
-        code: obf_result.getObfuscatedCode(),
-        tokens: esprima.tokenize(code)
+        code: obf_code,
+        tokens: esprima.tokenize(obf_code)
     };
 
     return result;

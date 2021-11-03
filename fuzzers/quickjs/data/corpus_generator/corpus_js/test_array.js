@@ -1,3 +1,4 @@
+function fuzz() {
 var a = [1, 2, 3];
 a = new Array(10);
 a = new Array(1, 2);
@@ -17,3 +18,6 @@ Object.defineProperty(a, "3", { configurable: false });
 err = false;
 a.length = 2;
 err = true;
+}
+
+fuzz();
