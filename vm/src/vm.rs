@@ -7,9 +7,10 @@ use crate::x64::{
 };
 use kvm_bindings::{
     kvm_guest_debug, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, kvm_userspace_memory_region,
-    Msrs, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES,
+    Msrs, KVM_API_VERSION, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES,
+    KVM_SYNC_X86_REGS, KVM_SYNC_X86_SREGS,
 };
-use kvm_ioctls::{Kvm, VcpuExit, VcpuFd, VmFd};
+use kvm_ioctls::{Cap, Kvm, KvmRunWrapper, VcpuExit, VcpuFd, VmFd};
 use nix::errno::Errno;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -155,6 +156,8 @@ pub struct Vm {
     kvm_vm: VmFd,
     /// Kvm vm vcpu file descriptor
     kvm_vcpu: VcpuFd,
+    /// Kvm vcpu run
+    kvm_vcpu_run: KvmRunWrapper,
     /// Local copy of kvm registers
     registers: kvm_regs,
     /// Local copy of kvm special registers
@@ -185,6 +188,9 @@ impl Vm {
         // Setup exception handling
         vm.setup_exception_handling()?;
 
+        // Flush registers
+        vm.flush_registers()?;
+
         Ok(vm)
     }
 
@@ -196,12 +202,24 @@ impl Vm {
 
         // 2 - Create the Kvm handles
         let kvm_fd = Kvm::new().map_err(|_| VmError::HvError("Could not open kvm device"))?;
+        if kvm_fd.get_api_version() as u32 != KVM_API_VERSION {
+            return Err(VmError::HvError("Wrong KVM api version"));
+        }
+        if !kvm_fd.check_extension(Cap::SyncRegs) {
+            return Err(VmError::HvError("SyncRegs capability not present"));
+        }
+
         let vm_fd = kvm_fd
             .create_vm()
             .map_err(|_| VmError::HvError("Could not create vm fd"))?;
         let vcpu_fd = vm_fd
             .create_vcpu(0)
             .map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
+        let vcpu_mmap_size = kvm_fd
+            .get_vcpu_mmap_size()
+            .map_err(|_| VmError::HvError("Could not get vcpu mmap size"))?;
+        let vcpu_run = KvmRunWrapper::mmap_from_fd(&vcpu_fd, vcpu_mmap_size)
+            .map_err(|_| VmError::HvError("Could not get wrapper arround vcpu"))?;
 
         // 3 - Setup guest memory
         unsafe {
@@ -217,6 +235,10 @@ impl Vm {
                 .map_err(|_| VmError::HvError("Could not set memory region for guest"))?
         }
 
+        // Get registers
+        let regs = vcpu_fd
+            .get_regs()
+            .map_err(|_| VmError::HvError("Could not get general registers"))?;
         // Get special registers
         let sregs = vcpu_fd
             .get_sregs()
@@ -227,7 +249,8 @@ impl Vm {
             _kvm: kvm_fd,
             kvm_vm: vm_fd,
             kvm_vcpu: vcpu_fd,
-            registers: Default::default(),
+            kvm_vcpu_run: vcpu_run,
+            registers: regs,
             special_registers: sregs,
             memory: vm_memory,
             hypercall_page: 0,
@@ -517,16 +540,59 @@ impl Vm {
         }
     }
 
+    fn flush_registers(&mut self) -> Result<()> {
+        // The second bit of rflags must always be set.
+        self.registers.rflags |= 1 << 1;
+
+        self.kvm_vcpu
+            .set_regs(&self.registers)
+            .map_err(|_| VmError::HvError("Could not commit registers"))?;
+
+        self.kvm_vcpu
+            .set_sregs(&self.special_registers)
+            .map_err(|_| VmError::HvError("Could not commit special registers"))?;
+
+        // gs_base and fs_base need to go through msrs
+        let msrs = Msrs::from_entries(&[
+            kvm_msr_entry {
+                index: IA32_FS_BASE,
+                data: self.fs_base,
+                ..Default::default()
+            },
+            kvm_msr_entry {
+                index: IA32_GS_BASE,
+                data: self.gs_base,
+                ..Default::default()
+            },
+        ]);
+        self.kvm_vcpu
+            .set_msrs(&msrs)
+            .map_err(|_| VmError::HvError("Could not commit fsbase and gsbase"))?;
+
+        // Get special registers
+        self.registers = self
+            .kvm_vcpu
+            .get_regs()
+            .map_err(|_| VmError::HvError("Could not get special registers"))?;
+        // Get special registers
+        self.special_registers = self
+            .kvm_vcpu
+            .get_sregs()
+            .map_err(|_| VmError::HvError("Could not get general registers"))?;
+        self.kvm_vcpu_run.as_mut_ref().kvm_dirty_regs = 0;
+
+        Ok(())
+    }
+
     /// Commit local copy of registers to kvm
     fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
         self.registers.rflags |= 1 << 1;
-        self.kvm_vcpu
-            .set_regs(&self.registers)
-            .map_err(|_| VmError::HvError("Could not commit registers"))?;
-        self.kvm_vcpu
-            .set_sregs(&self.special_registers)
-            .map_err(|_| VmError::HvError("Could not commit special registers"))?;
+
+        self.kvm_vcpu_run.as_mut_ref().s.regs.regs = self.registers;
+        self.kvm_vcpu_run.as_mut_ref().s.regs.sregs = self.special_registers;
+        self.kvm_vcpu_run.as_mut_ref().kvm_dirty_regs |=
+            KVM_SYNC_X86_SREGS as u64 | KVM_SYNC_X86_REGS as u64;
 
         // gs_base and fs_base need to go through msrs
         let msrs = Msrs::from_entries(&[
@@ -555,17 +621,16 @@ impl Vm {
         let result = loop {
             self.commit_registers()?;
 
+            self.kvm_vcpu_run.as_mut_ref().kvm_valid_regs |=
+                KVM_SYNC_X86_REGS as u64 | KVM_SYNC_X86_SREGS as u64;
+
             let exit = self.kvm_vcpu.run();
 
-            // Synchronize normal registers
-            self.registers = self
-                .kvm_vcpu
-                .get_regs()
-                .map_err(|_| VmError::HvError("Could not get registers"))?;
-            self.special_registers = self
-                .kvm_vcpu
-                .get_sregs()
-                .map_err(|_| VmError::HvError("Could not get special registers"))?;
+            // Synchronize registers
+            unsafe {
+                self.registers = self.kvm_vcpu_run.as_mut_ref().s.regs.regs;
+                self.special_registers = self.kvm_vcpu_run.as_mut_ref().s.regs.sregs;
+            }
 
             // Synchronize fs_base and gs_base
             let mut msrs = Msrs::from_entries(&[
@@ -739,6 +804,7 @@ impl Vm {
 
         // Load all the registers
         vm.set_regs_snapshot(&info.registers);
+        vm.flush_registers()?;
 
         Ok(vm)
     }
@@ -768,24 +834,29 @@ impl Vm {
 
         // Loop through each dirty page and reset it
         for (bm_index, bm_entry) in dirty_log.iter().enumerate() {
-            for i in 0..64 {
+            let mut bm = *bm_entry;
+
+            while bm != 0 {
+                // Get next frame dirtied
+                let i = bm.trailing_zeros() as usize;
                 let pa = (bm_index * 64 + i) * PAGE_SIZE;
 
-                if bm_entry.is_bit_set(i) {
-                    // Get raw mutable slice to the pmem to restore
-                    let mut page_data = self
-                        .memory
-                        .pmem
-                        .raw_slice_mut(pa, PAGE_SIZE)
-                        .expect("Could not restore page in dirty vm");
+                // Get raw mutable slice to the pmem to restore
+                let mut page_data = self
+                    .memory
+                    .pmem
+                    .raw_slice_mut(pa, PAGE_SIZE)
+                    .expect("Could not restore page in dirty vm");
 
-                    // Read original data to the slice
-                    other
-                        .memory
-                        .pmem
-                        .read(pa, &mut page_data)
-                        .expect("Could not read physical memory from source vm");
-                }
+                // Read original data to the slice
+                other
+                    .memory
+                    .pmem
+                    .read(pa, &mut page_data)
+                    .expect("Could not read physical memory from source vm");
+
+                // Go tp the next bit
+                bm &= bm - 1;
             }
         }
     }
