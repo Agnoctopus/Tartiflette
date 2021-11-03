@@ -108,7 +108,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
         // Reserve area for the harness input place
         const INPUT_START: u64 = 0x22000;
-        const INPUT_SIZE: u64 = 0x1000;
+        const INPUT_SIZE: u64 = 0x2000;
         orig_vm.mmap(INPUT_START, INPUT_SIZE as usize, PagePermissions::READ)
             .expect("Could not allocate input memory");
 
@@ -126,7 +126,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // Decode the encoded input to text javascript
             let mut input_buffer = [0u8; (INPUT_SIZE - 1) as usize];
-            let mut token_writer = BufWriter::new(input_buffer.as_mut());
+            let mut token_writer = BufWriter::new(&mut input_buffer[..]);
 
             // TODO: Use a BytesInput of u16 instead of u8
             for chunk in input.bytes().chunks_exact(2) {
@@ -143,10 +143,15 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // Set Vm registers
             let js_input = token_writer.buffer();
+
+            // TODO: Investigate why the buffer returned by the BufWriter is sometimes bigger than
+            //       its backing array.
+            if (js_input.len() > (INPUT_START - 1) as usize) {
+                return ExitKind::Ok;
+            }
+
             vm.set_reg(Register::Rsi, INPUT_START);
             vm.set_reg(Register::Rdx, js_input.len() as u64);
-
-            // panic!("code: {}", String::from_utf8_lossy(js_input));
 
             // Write the fuzz case to the vm memory
             vm.write(INPUT_START, js_input)
@@ -253,10 +258,8 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
         // Fuzz
-        let mut timeout_executor = TimeoutExecutor::new(executor, Duration::new(1, 0));
-
         fuzzer
-            .fuzz_loop(&mut stages, &mut timeout_executor, &mut state, &mut mgr)
+            .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
             .expect("Error in the fuzzing loop");
 
         Ok(())
