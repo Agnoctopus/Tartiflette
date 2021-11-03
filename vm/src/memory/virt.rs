@@ -29,14 +29,14 @@ impl VirtualMemory {
         let mut pmem = PhysicalMemory::new(memory_size)?;
 
         // Setup the page directory
-        let page = pmem
+        let frame = pmem
             .allocate_frame()
             .expect("Could not allocate page directory");
-        pmem.write(page, &[0; PAGE_SIZE])?;
+        pmem.write(frame, &[0; PAGE_SIZE])?;
 
         Ok(VirtualMemory {
             pmem: pmem,
-            page_directory: page,
+            page_directory: frame,
         })
     }
 
@@ -57,7 +57,6 @@ impl VirtualMemory {
         // Set p1 entry
         p1.entries[addr.p1_index()].set_address(frame as u64);
         p1.entries[addr.p1_index()].set_present(true);
-
         p1.entries[addr.p1_index()].set_writable(perms.writable());
         p1.entries[addr.p1_index()].set_executable(perms.executable());
 
@@ -162,6 +161,7 @@ impl VirtualMemory {
     }
 
     /// Writes a passed value to memory
+    #[inline]
     pub fn write_val<T>(&mut self, address: u64, val: T) -> Result<()> {
         let slice = unsafe {
             std::slice::from_raw_parts(&val as *const T as *const u8, core::mem::size_of::<T>())
@@ -171,6 +171,7 @@ impl VirtualMemory {
     }
 
     /// Reads a given value from memory
+    #[inline]
     pub fn read_val<T>(&self, address: u64) -> Result<T> {
         // TODO: Find a better way of doing this
         let mut bytes: Vec<u8> = vec![0; core::mem::size_of::<T>()];
@@ -188,16 +189,19 @@ impl VirtualMemory {
     }
 
     /// Returns the host starting address for guest memory
+    #[inline]
     pub fn host_address(&self) -> u64 {
         self.pmem.host_address() as u64
     }
 
     /// Returns the host allocated size for guest memory
+    #[inline]
     pub fn host_memory_size(&self) -> usize {
         self.pmem.size()
     }
 
     /// Returns an iterator over all mappings
+    #[inline]
     pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         PageIterator::new(&self).map(|(addr, page)| Mapping {
             address: addr,
@@ -207,6 +211,7 @@ impl VirtualMemory {
     }
 
     /// Returns a raw mutable Iterator over present PageTableEntries
+    #[inline]
     pub fn raw_pages_mut(&mut self) -> impl Iterator<Item = (u64, &mut PageTableEntry)> + '_ {
         PageIteratorMut::new(self)
     }

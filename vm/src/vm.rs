@@ -760,27 +760,31 @@ impl Vm {
             "Vm memory mismatch"
         );
 
+        // Get the dirty log from KVM
         let dirty_log = self
             .kvm_vm
             .get_dirty_log(0, self.memory.host_memory_size())
             .expect("Could not get dirty log for current vm");
 
+        // Loop through each dirty page and reset it
         for (bm_index, bm_entry) in dirty_log.iter().enumerate() {
             for i in 0..64 {
                 let pa = (bm_index * 64 + i) * PAGE_SIZE;
 
-                if (bm_entry >> i) & 1 == 1 {
-                    let mut data: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+                if bm_entry.is_bit_set(i) {
+                    // Get raw mutable slice to the pmem to restore
+                    let mut page_data = self
+                        .memory
+                        .pmem
+                        .raw_slice_mut(pa, PAGE_SIZE)
+                        .expect("Could not restore page in dirty vm");
 
+                    // Read original data to the slice
                     other
                         .memory
                         .pmem
-                        .read(pa, &mut data)
+                        .read(pa, &mut page_data)
                         .expect("Could not read physical memory from source vm");
-                    self.memory
-                        .pmem
-                        .write(pa, &data)
-                        .expect("Could not restore page in dirty vm");
                 }
             }
         }

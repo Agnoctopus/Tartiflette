@@ -147,10 +147,12 @@ pub struct Tss {
 }
 
 impl Tss {
+    /// Create a new `Tss` instance
     pub fn new() -> Self {
         Tss::default()
     }
 
+    /// Set interrupt stack table entry
     pub fn set_ist(&mut self, index: usize, address: u64) {
         assert!(
             index > 0 && index <= 7,
