@@ -9,9 +9,9 @@ use libafl::{
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider}
     },
-    corpus::{InMemoryCorpus, OnDiskCorpus, QueueCorpusScheduler},
+    corpus::{InMemoryCorpus, QueueCorpusScheduler},
     inputs::{BytesInput, HasBytesVec},
-    executors::{TimeoutExecutor, ExitKind},
+    executors::ExitKind,
     state::StdState,
     fuzzer::{Fuzzer, StdFuzzer},
     observers::{StdMapObserver, TimeObserver},
@@ -146,7 +146,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // TODO: Investigate why the buffer returned by the BufWriter is sometimes bigger than
             //       its backing array.
-            if (js_input.len() > (INPUT_START - 1) as usize) {
+            if js_input.len() > (INPUT_START - 1) as usize {
                 return ExitKind::Ok;
             }
 
