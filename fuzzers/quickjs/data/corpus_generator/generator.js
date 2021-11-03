@@ -76,7 +76,31 @@ function normalizeCode(code) {
     return result;
 }
 
-function main(options) {
+function main_decode(options) {
+    if (!options.json) {
+        throw "Token cache file was not specified with '-j'";
+    }
+
+    var token_cache = JSON.parse(fs.readFileSync(options.json));
+    var binfile = fs.readFileSync(options.decode);
+    var code = new Uint16Array(binfile.length / 2);
+
+    for (var i = 0; i < binfile.length; i += 2) {
+        code[i / 2] = (binfile[i+1] << 8) | binfile[i];
+    }
+
+    console.log(code);
+
+    var str = "";
+
+    code.forEach((tokval) => {
+        str += token_cache.tokens[tokval % token_cache.tokens.length];
+    });
+
+    console.log(str);
+}
+
+function main_encode(options) {
     // First process all the files
     var token_cache = new Set();
     var files = fs.readdirSync("./corpus_js/").map(file => {
@@ -116,6 +140,15 @@ function main(options) {
         fs.writeFileSync(`./corpus_obf/${file.name}`, file.code);
     });
 
+    // Post processing for some specific tokens
+    const spaced_tokens = new Set([
+        "new", "var", "let", "function"
+    ]);
+
+    token_list = token_list.map((x) => {
+        return spaced_tokens.has(x) ? x + " " : x;
+    });
+
     // If set, output the token list as a json file to be consumed by other tools
     if (options.json) {
         console.log(`Writing token list to ${options.json}`);
@@ -124,9 +157,18 @@ function main(options) {
     }
 }
 
+function main(options) {
+    if (options.decode) {
+        main_decode(options)
+    } else {
+        main_encode(options);
+    }
+}
+
 program
     .description("Quickjs encoded corpus generator")
     .option("-j, --json <path>", "Output token list a json file")
+    .option("-d, --decode <path>", "Binary file to decode");
 
 program.parse();
 var options = program.opts();
