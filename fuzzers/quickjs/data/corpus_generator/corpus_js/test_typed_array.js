@@ -22,6 +22,10 @@ a = new Uint8Array(buffer);
 str = a.toString();
 a = new Uint8Array([1, 2, 3, 4]);
 a.set([10, 11], 2);
+a.map((x) => x * 2);
+buffer = a.slice(1, 3);
+a.sort();
+a.copyWithin(3, 0, 3);
 }
 
 fuzz();
