@@ -89,8 +89,6 @@ function main_decode(options) {
         code[i / 2] = (binfile[i+1] << 8) | binfile[i];
     }
 
-    console.log(code);
-
     var str = "";
 
     code.forEach((tokval) => {
@@ -142,7 +140,7 @@ function main_encode(options) {
 
     // Post processing for some specific tokens
     const spaced_tokens = new Set([
-        "new", "var", "let", "function"
+        "new", "var", "let", "const", "function"
     ]);
 
     token_list = token_list.map((x) => {
