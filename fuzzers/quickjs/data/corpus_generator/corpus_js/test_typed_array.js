@@ -1,4 +1,4 @@
-function fuzz() {
+(function () {
 var buffer, a, i, str;
 a = new Uint8Array(4);
 a[0] = -1;
@@ -26,6 +26,4 @@ a.map((x) => x * 2);
 buffer = a.slice(1, 3);
 a.sort();
 a.copyWithin(3, 0, 3);
-}
-
-fuzz();
+})();

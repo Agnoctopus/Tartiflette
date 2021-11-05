@@ -1,4 +1,4 @@
-function fuzz() {
+(function () {
     const wm1 = new WeakMap(),
     wm2 = new WeakMap(),
     wm3 = new WeakMap();
@@ -26,5 +26,4 @@ function fuzz() {
     wm1.has(o1);
     wm1.delete(o1);
     wm1.has(o1);
-}
-fuzz();
+})();

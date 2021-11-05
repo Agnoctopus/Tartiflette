@@ -1,4 +1,4 @@
-function fuzz() {
+(function () {
 var a, tab;
 a = {x:1,
      "18014398509481984": 1,
@@ -10,5 +10,4 @@ a = {x:1,
      "4294967294": 1,
      "1": 2};
 tab = Object.keys(a);
-}
-fuzz();
+})();

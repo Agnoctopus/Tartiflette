@@ -1,4 +1,4 @@
-function fuzz() {
+(function() {
 var a = [1, 2, 3];
 var my = new Array(["a", 1, 2, 3, "x", a]);
 a = new Array(10);
@@ -27,6 +27,4 @@ Object.defineProperty(a, "3", { configurable: false });
 err = false;
 a.length = 2;
 err = true;
-}
-
-fuzz();
+})();

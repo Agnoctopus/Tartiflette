@@ -1,4 +1,4 @@
-function fuzz() {
+(function () {
     var a;
     a = String("abc");
     a.length == 3;
@@ -29,5 +29,4 @@ function fuzz() {
     s.anchor({
         toString: () => "ret"
     });
-}
-fuzz();
+})();
