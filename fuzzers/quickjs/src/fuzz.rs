@@ -3,20 +3,30 @@ use libafl::{
     feedback_or,
     bolts::{
         current_nanos,
-        tuples::tuple_list,
+        tuples::{tuple_list, tuple_list_type},
         launcher::Launcher,
         os::parse_core_bind_arg,
-        rands::StdRand,
+        rands::{Rand, StdRand},
         shmem::{ShMemProvider, StdShMemProvider}
     },
-    corpus::{InMemoryCorpus, QueueCorpusScheduler},
+    corpus::{Corpus, InMemoryCorpus, QueueCorpusScheduler},
     inputs::{BytesInput, HasBytesVec},
     executors::ExitKind,
-    state::StdState,
+    state::{StdState, HasCorpus, HasRand, HasMetadata, HasMaxSize},
     fuzzer::{Fuzzer, StdFuzzer},
     observers::{StdMapObserver, TimeObserver},
     feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback, TimeFeedback},
+    inputs::Input,
+    mutators::MutatorsTuple,
     mutators::scheduled::{havoc_mutations, StdScheduledMutator},
+    mutators::mutations::{
+        ByteRandMutator,
+        BytesInsertMutator,
+        BytesSwapMutator,
+        BytesExpandMutator,
+        CrossoverInsertMutator,
+        CrossoverReplaceMutator,
+    },
     stages::mutational::StdMutationalStage,
     stats::MultiStats
 };
@@ -69,6 +79,30 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
     }
 
     result
+}
+
+ fn token_mutations<C, I, R, S>() -> tuple_list_type!(
+     ByteRandMutator<I, R, S>,
+     BytesInsertMutator<I, R, S>,
+     BytesSwapMutator<I, R, S>,
+     BytesExpandMutator<I, R, S>,
+     CrossoverReplaceMutator<C, I, R, S>,
+     CrossoverInsertMutator<C, I, R, S>
+    )
+    where
+        I: Input + HasBytesVec,
+        S: HasRand<R> + HasCorpus<C, I> + HasMetadata + HasMaxSize,
+        C: Corpus<I>,
+        R: Rand,
+{
+    tuple_list!(
+        ByteRandMutator::new(),
+        BytesInsertMutator::new(),
+        BytesSwapMutator::new(),
+        BytesExpandMutator::new(),
+        CrossoverReplaceMutator::new(),
+        CrossoverInsertMutator::new()
+    )
 }
 
 // Starts a fuzzing run
@@ -137,8 +171,7 @@ pub fn fuzz(config: FuzzerConfig) {
                 let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
 
                 // Write token to memory
-                token_writer.write(token_str.as_bytes())
-                            .expect("Failed to write token");
+                token_writer.write(token_str.as_bytes());
             }
 
             // Set Vm registers
@@ -254,7 +287,7 @@ pub fn fuzz(config: FuzzerConfig) {
             .expect("Could not load corpus files");
 
         // Setup mutation stages
-        let mutator = StdScheduledMutator::new(havoc_mutations());
+        let mutator = StdScheduledMutator::new(token_mutations());
         let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
         // Fuzz
