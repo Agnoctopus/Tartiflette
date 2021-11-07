@@ -14,9 +14,9 @@ as the token mappings (`data/tokens.json`) are already provided. The fuzzer can
 be executed out of the box as follows:
 
 ```sh
-$ cargo run # Runs the fuzzer on core 1
-$ cargo run -- -c 1-4 # Runs the fuzzer on cores 1 to 4
-$ cargo run -- -c all # Runs the fuzzer on all cores
+$ cargo run --release # Runs the fuzzer on core 1
+$ cargo run --release -- -c 1-4 # Runs the fuzzer on cores 1 to 4
+$ cargo run --release -- -c all # Runs the fuzzer on all cores
 ```
 
 ## Generating encoded javascript files
