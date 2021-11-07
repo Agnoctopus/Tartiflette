@@ -9,9 +9,9 @@ purposes.
 
 ## How to
 
-For demonstration purposes, an encoded javascript corpus as well as the token
-mappings (`data/tokens.json`) is already provided. The fuzzer can be executed
-as follows:
+For demonstration purposes, a snapshot, an encoded javascript corpus, as well
+as the token mappings (`data/tokens.json`) are already provided. The fuzzer can
+be executed out of the box as follows:
 
 ```sh
 $ cargo run # Runs the fuzzer on core 1
