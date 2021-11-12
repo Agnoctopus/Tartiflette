@@ -5,12 +5,13 @@ const program = require("commander");
 
 // Returns obfuscated code and a list of tokens
 function normalizeCode(code) {
+    // Compute predefined names of variables
     var var_names = [];
-
     for (let i = 0; i < 10; i++) {
         var_names.push("var" + i);
     }
 
+    // Create obfuscator
     var obf_result = obfuscator.obfuscate(code,
         {
             compact: false,
@@ -66,8 +67,8 @@ function normalizeCode(code) {
         }
     );
 
+    // Build the normalized code result
     const obf_code = obf_result.getObfuscatedCode();
-
     var result = {
         code: obf_code,
         tokens: esprima.tokenize(obf_code)
@@ -81,21 +82,23 @@ function main_decode(options) {
         throw "Token cache file was not specified with '-j'";
     }
 
+    // Get token cache and binary file contents to decode
     var token_cache = JSON.parse(fs.readFileSync(options.json));
     var binfile = fs.readFileSync(options.decode);
-    var code = new Uint16Array(binfile.length / 2);
 
+    // Decode the file list of tokens index
+    var tokens_index = new Uint16Array(binfile.length / 2);
     for (var i = 0; i < binfile.length; i += 2) {
-        code[i / 2] = (binfile[i+1] << 8) | binfile[i];
+        tokens_index[i / 2] = (binfile[i + 1] << 8) | binfile[i];
     }
 
-    var str = "";
-
-    code.forEach((tokval) => {
-        str += token_cache.tokens[tokval % token_cache.tokens.length];
+    // Decode the file code
+    var code = "";
+    tokens_index.forEach((token_index) => {
+        code += token_cache.tokens[token_index % token_cache.tokens.length];
     });
 
-    console.log(str);
+    console.log(code);
 }
 
 function main_encode(options) {
@@ -104,45 +107,58 @@ function main_encode(options) {
     var files = fs.readdirSync("./corpus_js/").map(file => {
         console.log(`Analyzing file ${file}`);
 
+        // Get the normalized file contents
         var contents = fs.readFileSync(`./corpus_js/${file}`, { encoding: "UTF-8" });
         var result = normalizeCode(contents);
 
         // Add tokens to the cache
         result.tokens.forEach(tok => token_cache.add(tok.value));
+
+        // Map normalized file contents to a file object
         var file_obj = {
             name: file,
             code: result.code,
             tokens: result.tokens
         };
-
         return file_obj;
     });
 
+    // Get token list
     var token_list = Array.from(token_cache);
     console.log(`Collected ${token_list.length} different tokens`);
+    if (token_list.length > 0xffff) {
+        throw `Too many tokens to fit in 16bits (${token_list.length})`
+    }
 
-    // Now output the encoded files + the obfuscated source for debugging
+    // Ensure the existence of output directories
+    const corpus_bin_dir = './corpus_bin';
+    const corpus_obf_dir = './corpus_obf';
+    if (!fs.existsSync(corpus_bin_dir)) {
+        fs.mkdirSync(corpus_bin_dir, { recursive: true });
+    }
+    if (!fs.existsSync(corpus_obf_dir)) {
+        fs.mkdirSync(corpus_obf_dir, { recursive: true });
+    }
+
+    // Output the encoded files and the obfuscated source for debugging
     files.forEach(file => {
-        if (token_list.length > 0xffff) {
-            throw `Too many tokens to fit in 16bits (${token_list.length})`
-        }
-
         console.log(`Compiling ${file.name} ...`);
-        var encoded_contents = new Uint16Array(file.tokens.length);
 
+        // Encode file contents
+        var encoded_contents = new Uint16Array(file.tokens.length);
         for (var i = 0; i < file.tokens.length; i++) {
             encoded_contents[i] = token_list.indexOf(file.tokens[i].value);
         }
 
-        fs.writeFileSync(`./corpus_bin/${file.name}`, encoded_contents);
-        fs.writeFileSync(`./corpus_obf/${file.name}`, file.code);
+        // Write encoded contents and obfuscated source
+        fs.writeFileSync(`${corpus_bin_dir}/${file.name}`, encoded_contents);
+        fs.writeFileSync(`${corpus_obf_dir}/${file.name}`, file.code);
     });
 
-    // Post processing for some specific tokens
+    // Postprocess some specific tokens
     const spaced_tokens = new Set([
         "new", "var", "let", "const", "function"
     ]);
-
     token_list = token_list.map((x) => {
         return spaced_tokens.has(x) ? x + " " : x;
     });
