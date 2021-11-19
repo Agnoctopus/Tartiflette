@@ -1,16 +1,18 @@
 use core::marker::PhantomData;
+use libafl::{
+    executors::{Executor, ExitKind, HasObservers},
+    inputs::Input,
+    observers::{MapObserver, ObserversTuple, StdMapObserver},
+    Error,
+};
+use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use nix::unistd::alarm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
 use std::time::{Duration, Instant};
-use libafl::{
-    executors::{Executor, ExitKind, HasObservers},
-    observers::{ObserversTuple, StdMapObserver, MapObserver},
-    inputs::Input,
-    Error
-};
-use nix::sys::signal::{sigaction, Signal, SigHandler, SigAction, SigSet, SaFlags};
-use nix::unistd::alarm;
-use tartiflette_vm::{Vm, VmExit, Register};
+use tartiflette_vm::{Register, Vm, VmExit};
+
+const INT3: u8 = 0xCC;
 
 // XXX: Big hack to handle timeouts. We simply catch SIGALARM and do nothing,
 //      which will make kvm_run(...) fail with EINTR so we can return a timeout.
@@ -22,12 +24,11 @@ pub fn install_alarm_handler() {
     let action = SigAction::new(
         SigHandler::Handler(alarm_handler),
         SaFlags::empty(),
-        SigSet::empty()
+        SigSet::empty(),
     );
 
     unsafe {
-        sigaction(Signal::SIGALRM, &action)
-        .expect("Failed to setup SIGALRM handler");
+        sigaction(Signal::SIGALRM, &action).expect("Failed to setup SIGALRM handler");
     }
 }
 
@@ -35,7 +36,7 @@ pub fn install_alarm_handler() {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutorError {
     /// Error during interaction with the vm
-    VmError(&'static str)
+    VmError(&'static str),
 }
 
 /// Mode of execution after a hook was fired
@@ -47,7 +48,7 @@ pub enum HookResult {
     /// Hook induced crash
     Crash,
     /// Hook induced stop
-    Exit
+    Exit,
 }
 
 pub type TartifletteHook = dyn FnMut(&mut Vm) -> HookResult;
@@ -57,7 +58,7 @@ pub struct TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
-    OT: ObserversTuple<I, S>
+    OT: ObserversTuple<I, S>,
 {
     /// Function to prepare the vm state before execution
     harness_fn: &'a mut H,
@@ -80,14 +81,14 @@ where
     /// Timeout duration
     timeout_duration: Duration,
     /// Execution hooks
-    phantom: PhantomData<(I, S)>
+    phantom: PhantomData<(I, S)>,
 }
 
 impl<'a, EM, H, I, OT, S, Z> Executor<EM, I, S, Z> for TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
-    OT: ObserversTuple<I, S>
+    OT: ObserversTuple<I, S>,
 {
     fn run_target(
         &mut self,
@@ -97,7 +98,8 @@ where
         input: &I,
     ) -> std::result::Result<ExitKind, Error> {
         // Load the map we will modify with coverage
-        let map_observer = self.observers
+        let map_observer = self
+            .observers
             .match_name_mut::<StdMapObserver<u8>>("coverage")
             .expect("TartifletteExecutor expects a StdMapObserver<u8> named 'coverage'");
 
@@ -122,8 +124,7 @@ where
                 break ExitKind::Timeout;
             }
 
-            let vmexit = self.exec_vm.run()
-                .expect("Unexpected vm error");
+            let vmexit = self.exec_vm.run().expect("Unexpected vm error");
             let rip = self.exec_vm.get_reg(Register::Rip);
 
             match vmexit {
@@ -138,21 +139,43 @@ where
                     } else {
                         panic!("Guest used a syscall but not handler was defined");
                     }
-                },
+                }
+                VmExit::Exception(code) => {
+                    match code {
+                        // Exception debug, raise after trap flasg set for a singlestep
+                        1 => {
+                            // Get the starting point before the singlestep
+                            let starting_rip = singlestep
+                                .take()
+                                .expect("Debug exception triggered not in singlestep");
+
+                            // Restore the breakpoint
+                            // Should be safe as well as we came from starting rip
+                            self.exec_vm
+                                .write_value::<u8>(starting_rip, INT3)
+                                .expect("Error while restoring exec_vm hook (after continue)");
+
+                            // Disable the trap bit
+                            let mut rflags = self.exec_vm.get_reg(Register::Rflags);
+                            rflags &= !(1 << 8);
+                            self.exec_vm.set_reg(Register::Rflags, rflags);
+                        }
+                        _ => break ExitKind::Crash,
+                    }
+                }
                 VmExit::Breakpoint => {
                     // Handling the singlestep after a continue
-                    if let Some(starting_rip) = singlestep {
+                    if let Some(starting_rip) = singlestep.take() {
                         // Restore the breakpoint
                         // Should be safe as well as we came from starting rip
-                        self.exec_vm.write_value::<u8>(starting_rip, 0xcc)
+                        self.exec_vm
+                            .write_value::<u8>(starting_rip, INT3)
                             .expect("Error while restoring exec_vm hook (after continue)");
 
                         // Disable the trap bit
-                        let rflags = self.exec_vm.get_reg(Register::Rflags);
-                        self.exec_vm.set_reg(Register::Rflags, rflags & !(1 << 8));
-
-                        // Empty the singlestep slot
-                        singlestep = None;
+                        let mut rflags = self.exec_vm.get_reg(Register::Rflags);
+                        rflags &= !(1 << 8);
+                        self.exec_vm.set_reg(Register::Rflags, rflags);
                     }
 
                     // Handle coverage
@@ -164,9 +187,11 @@ where
 
                         // Normally it is impossible for the memory access to fail
                         // as we breakpointed on the instruction at rip.
-                        self.exec_vm.write_value::<u8>(rip, *orig_byte)
+                        self.exec_vm
+                            .write_value::<u8>(rip, *orig_byte)
                             .expect("Error while removing exec_vm coverage");
-                        self.reset_vm.write_value::<u8>(rip, *orig_byte)
+                        self.reset_vm
+                            .write_value::<u8>(rip, *orig_byte)
                             .expect("Error while removing reset_vm coverage");
 
                         // Remove the breakpoint from the coverage
@@ -175,13 +200,13 @@ where
 
                         // Add the coverage to the map
                         let map = map_observer.map_mut();
-                        map[(rip as usize) % map.len()] += 1;
+                        let bb_index = (rip as usize) % map.len();
+                        map[bb_index] += 1;
 
                         // Call coverage hook if any
                         if let Some(hook) = &mut self.coverage_hook {
                             hook(rip)
                         }
-
                     }
 
                     // Handle hooks
@@ -190,6 +215,7 @@ where
                             HookResult::Exit => break ExitKind::Ok,
                             HookResult::Crash => break ExitKind::Crash,
                             HookResult::Continue => {
+                                println!("Continue Hook: {:x}", rip);
                                 // The user wants to continue execution right
                                 // after its hook. First restore the original
                                 // code byte.
@@ -197,23 +223,25 @@ where
 
                                 // This write should never fail as we breakpointed
                                 // on this address.
-                                self.exec_vm.write_value::<u8>(rip, *orig_byte)
+                                self.exec_vm
+                                    .write_value::<u8>(rip, *orig_byte)
                                     .expect("Error while restoring hook byte");
 
                                 // Activate trap flag and fill the singlestep slot
                                 let rflags = self.exec_vm.get_reg(Register::Rflags);
                                 self.exec_vm.set_reg(Register::Rflags, rflags | (1 << 8));
+
                                 singlestep = Some(rip);
                             }
                             HookResult::Redirect => {}
                         }
                     }
-                },
+                }
                 // TODO: See how to properly handle hlt (crash ? normal exit ? forward to user ?)
                 VmExit::Hlt => {
                     panic!("guest abort (hlt)");
-                },
-                _ => break ExitKind::Crash
+                }
+                _ => break ExitKind::Crash,
             }
         };
 
@@ -231,10 +259,18 @@ impl<'a, H, I, OT, S> TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
-    OT: ObserversTuple<I, S>
+    OT: ObserversTuple<I, S>,
 {
-    pub fn new(vm: &Vm, timeout: Duration, observers: OT, harness: &'a mut H) -> Result<Self, ExecutorError> {
-        assert!(timeout >= Duration::from_secs(1), "Timeout must at least be 1 second");
+    pub fn new(
+        vm: &Vm,
+        timeout: Duration,
+        observers: OT,
+        harness: &'a mut H,
+    ) -> Result<Self, ExecutorError> {
+        assert!(
+            timeout >= Duration::from_secs(1),
+            "Timeout must at least be 1 second"
+        );
 
         Ok(TartifletteExecutor {
             harness_fn: harness,
@@ -247,7 +283,7 @@ where
             coverage_hook: None,
             orig_bytes: Default::default(),
             timeout_duration: timeout,
-            phantom: PhantomData::<(I, S)>
+            phantom: PhantomData::<(I, S)>,
         })
     }
 
@@ -255,43 +291,52 @@ where
     pub fn add_coverage(&mut self, address: u64) -> Result<(), ExecutorError> {
         // Check that the spot is not already instrumented
         if self.hooks.contains_key(&address) {
-            return Err(ExecutorError::VmError("Hook already installed at this address"));
+            return Err(ExecutorError::VmError(
+                "Hook already installed at this address",
+            ));
         }
 
         if self.coverage.contains(&address).not() {
             // Read original byte from memory
             let mut orig_byte: [u8; 1] = [0; 1];
-            self.exec_vm.read(address, &mut orig_byte)
-                .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
+            self.exec_vm.read(address, &mut orig_byte).map_err(|_| {
+                ExecutorError::VmError("Could not read original byte (invalid address ?)")
+            })?;
 
             // Write breakpoint to memory
-            self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
-            self.reset_vm.write_value::<u8>(address, 0xcc).unwrap();
+            self.exec_vm.write_value::<u8>(address, INT3).unwrap();
+            self.reset_vm.write_value::<u8>(address, INT3).unwrap();
 
             self.coverage.insert(address);
             self.orig_bytes.insert(address, orig_byte[0]);
-
         }
 
         Ok(())
     }
 
     /// Adds an address callback to the executor
-    pub fn add_hook(&mut self, address: u64, hook: &'a mut TartifletteHook) -> Result<(), ExecutorError> {
+    pub fn add_hook(
+        &mut self,
+        address: u64,
+        hook: &'a mut TartifletteHook,
+    ) -> Result<(), ExecutorError> {
         // Check that the spot is not already instrumented
         if self.coverage.contains(&address) {
-            return Err(ExecutorError::VmError("Coverage already installed at this address"));
+            return Err(ExecutorError::VmError(
+                "Coverage already installed at this address",
+            ));
         }
 
         // Read original byte
         let mut orig_byte: [u8; 1] = [0; 1];
-        self.exec_vm.read(address, &mut orig_byte)
-            .map_err(|_| ExecutorError::VmError("Could not read original byte (invalid address ?)"))?;
+        self.exec_vm.read(address, &mut orig_byte).map_err(|_| {
+            ExecutorError::VmError("Could not read original byte (invalid address ?)")
+        })?;
 
         if self.hooks.insert(address, hook).is_none() {
             // Write breakpoint to memory. Should not fail as orig byte was read from same address
-            self.exec_vm.write_value::<u8>(address, 0xcc).unwrap();
-            self.reset_vm.write_value::<u8>(address, 0xcc).unwrap();
+            self.exec_vm.write_value::<u8>(address, INT3).unwrap();
+            self.reset_vm.write_value::<u8>(address, INT3).unwrap();
 
             // New hook, add the original byte
             self.orig_bytes.insert(address, orig_byte[0]);
@@ -317,7 +362,7 @@ impl<'a, H, I, OT, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, O
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
-    OT: ObserversTuple<I, S>
+    OT: ObserversTuple<I, S>,
 {
     #[inline]
     fn observers(&self) -> &OT {
