@@ -16,6 +16,7 @@ enum Syscall {
     Mmap,
     Munmap,
     Ioctl,
+    Madvise,
     ExitGroup,
     Unknown,
 }
@@ -26,6 +27,7 @@ impl From<u64> for Syscall {
             9 => Syscall::Mmap,
             11 => Syscall::Munmap,
             16 => Syscall::Ioctl,
+            28 => Syscall::Madvise,
             231 => Syscall::ExitGroup,
             _ => Syscall::Unknown,
         }
@@ -48,16 +50,17 @@ impl SysEmu {
 
         let result = match syscall_code.into() {
             Syscall::Mmap => {
+                // Get the arguments
                 let addr = vm.get_reg(Register::Rdi);
                 let len = vm.get_reg(Register::Rsi);
                 let fd = vm.get_reg(Register::R8) as i64;
 
                 if fd != -1 {
-                    panic!("mmaping from a fd is not supported");
+                    panic!("Mapping from a fd is not supported");
                 }
 
-                if len & 0xff != 0 {
-                    panic!("len is not aligned");
+                if len & 0xfff != 0 {
+                    panic!("Mapping len (0x{:x}) is not aligned", len);
                 }
 
                 if addr != 0 {
@@ -73,7 +76,7 @@ impl SysEmu {
                 true
             }
             Syscall::Munmap => {
-                // Do a nop
+                // Do nothing
                 vm.set_reg(Register::Rax, 0);
                 true
             }
@@ -82,8 +85,13 @@ impl SysEmu {
                 vm.set_reg(Register::Rax, 0);
                 true
             }
+            Syscall::Madvise => {
+                // Do nothing
+                vm.set_reg(Register::Rax, 0);
+                true
+            }
             Syscall::ExitGroup => {
-                // Simply stop the execution
+                // Stop the execution
                 false
             }
             Syscall::Unknown => {
