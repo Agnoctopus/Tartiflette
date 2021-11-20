@@ -6,6 +6,9 @@ mod snapshot;
 mod vm;
 mod x64;
 
+#[macro_use]
+extern crate vmm_sys_util;
+
 pub use memory::{Mapping, PagePermissions};
 pub use snapshot::{
     SnapshotError, SnapshotInfo, SnapshotMapping, SnapshotModule, SnapshotRegisters,

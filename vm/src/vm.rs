@@ -5,18 +5,31 @@ use crate::x64::{
     ExceptionFrame, ExceptionType, IdtEntry, IdtEntryBuilder, IdtEntryType, PrivilegeLevel, Tss,
     TssEntry,
 };
+
 use kvm_bindings::{
-    kvm_guest_debug, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, kvm_userspace_memory_region,
-    Msrs, KVM_API_VERSION, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES,
-    KVM_SYNC_X86_REGS, KVM_SYNC_X86_SREGS,
+    kvm_clear_dirty_log, kvm_enable_cap, kvm_guest_debug, kvm_msr_entry, kvm_regs, kvm_segment,
+    kvm_sregs, kvm_userspace_memory_region, Msrs, KVMIO, KVM_API_VERSION,
+    KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE, KVM_GUESTDBG_ENABLE,
+    KVM_GUESTDBG_USE_SW_BP, KVM_MEM_LOG_DIRTY_PAGES, KVM_SYNC_X86_REGS, KVM_SYNC_X86_SREGS,
 };
 use kvm_ioctls::{Cap, Kvm, KvmRunWrapper, VcpuExit, VcpuFd, VmFd};
 use nix::errno::Errno;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+use vmm_sys_util::ioctl;
+
 type Result<T> = std::result::Result<T, VmError>;
+
+ioctl_iowr_nr!(KVM_CLEAR_DIRTY_LOG, KVMIO, 0xC0, kvm_clear_dirty_log);
+ioctl_io_nr!(KVM_CHECK_EXTENSION, KVMIO, 0x03);
+
+/// FS base MSR number
+const IA32_FS_BASE: u32 = 0xC0000100;
+/// GS base MSR numebr
+const IA32_GS_BASE: u32 = 0xC0000101;
 
 /// Vm manipulation error
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,12 +181,9 @@ pub struct Vm {
     gs_base: u64,
     /// Starting address of the hypercall region
     hypercall_page: u64,
-    /// VM Memory
-    memory: VirtualMemory,
+    /// Vm Memory
+    pub memory: VirtualMemory,
 }
-
-const IA32_FS_BASE: u32 = 0xC0000100;
-const IA32_GS_BASE: u32 = 0xC0000101;
 
 impl Vm {
     /// Creates a new `Vm` instance with a given memory size
@@ -200,28 +210,59 @@ impl Vm {
         // 1 - Allocate the memory
         let vm_memory = VirtualMemory::new(memory_size)?;
 
-        // 2 - Create the Kvm handles
+        // 2 - Open the kvm device and check some stuff
         let kvm_fd = Kvm::new().map_err(|_| VmError::HvError("Could not open kvm device"))?;
+
+        // Check the kvm api version
         if kvm_fd.get_api_version() as u32 != KVM_API_VERSION {
             return Err(VmError::HvError("Wrong KVM api version"));
         }
+
+        // Check the `SyncRegs` extension
         if !kvm_fd.check_extension(Cap::SyncRegs) {
             return Err(VmError::HvError("SyncRegs capability not present"));
         }
 
+        // Check the KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 extension
+        let ret = unsafe {
+            ioctl::ioctl_with_val(
+                &kvm_fd,
+                KVM_CHECK_EXTENSION(),
+                KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 as u64,
+            )
+        };
+        if ret <= 0 {
+            return Err(VmError::HvError(
+                "Manual dirty log protect capability not present",
+            ));
+        }
+
+        // 3 - Ask kvm to create a vm
         let vm_fd = kvm_fd
             .create_vm()
             .map_err(|_| VmError::HvError("Could not create vm fd"))?;
+
+        // Enable the KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 capability
+        let mut cap = kvm_enable_cap::default();
+        cap.cap = KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2;
+        cap.args[0] = KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE as u64;
+        vm_fd
+            .enable_cap(&cap)
+            .expect("Could not enable KVM_DIRTY_LOG_MANUAL_PROTECT");
+
+        // 4 - Ask kvm to create a new vcpu for our vm
         let vcpu_fd = vm_fd
             .create_vcpu(0)
             .map_err(|_| VmError::HvError("Could not create vm vcpu"))?;
+
+        // 5 - Map the VCPU kvm run memory region
         let vcpu_mmap_size = kvm_fd
             .get_vcpu_mmap_size()
             .map_err(|_| VmError::HvError("Could not get vcpu mmap size"))?;
         let vcpu_run = KvmRunWrapper::mmap_from_fd(&vcpu_fd, vcpu_mmap_size)
             .map_err(|_| VmError::HvError("Could not get wrapper arround vcpu"))?;
 
-        // 3 - Setup guest memory
+        // 6 - Setup guest memory
         unsafe {
             let region = kvm_userspace_memory_region {
                 slot: 0,
@@ -244,7 +285,7 @@ impl Vm {
             .get_sregs()
             .map_err(|_| VmError::HvError("Could not get special registers"))?;
 
-        // Construct the new `VM` object
+        // Construct the new `Vm` object
         Ok(Vm {
             _kvm: kvm_fd,
             kvm_vm: vm_fd,
@@ -275,7 +316,7 @@ impl Vm {
         const IA32_EFER_LMA: u64 = 1 << 10;
         const IA32_EFER_NXE: u64 = 1 << 11;
 
-        // 64 bits code segment
+        // Set the 64 bits code segment
         let mut seg = kvm_segment {
             base: 0,
             limit: 0,
@@ -291,12 +332,12 @@ impl Vm {
             unusable: 0,
             padding: 0,
         };
-
         self.special_registers.cs = seg;
 
         // seg.selector = 0;
         seg.type_ = 3;
 
+        // Set the others 64 bits segments
         self.special_registers.ds = seg;
         self.special_registers.es = seg;
         self.special_registers.fs = seg;
@@ -307,26 +348,25 @@ impl Vm {
         self.special_registers.cr0 = CR0_PE | CR0_PG | CR0_ET | CR0_WP;
         // Physical address extension (necessary for x64)
         self.special_registers.cr4 = CR4_PAE | CR4_OSXSAVE | CR4_OSFXSR;
+        // Sets the page table root address
+        self.special_registers.cr3 = self.memory.page_directory() as u64;
         // Sets x64 mode enabled (LME), active (LMA), executable disable bit support (NXE), syscall
         // support (SCE)
         self.special_registers.efer = IA32_EFER_LME | IA32_EFER_LMA | IA32_EFER_NXE;
-        // Sets the page table root address
-        self.special_registers.cr3 = self.memory.page_directory() as u64;
 
-        // Set tss
+        // Set the tss address
         self.kvm_vm
             .set_tss_address(0xfffb_d000)
             .map_err(|_| VmError::HvError("Could not set tss address"))?;
 
         // Enable vm exit on software breakpoints
-        let dregs = kvm_guest_debug {
+        let debug_struct = kvm_guest_debug {
             control: KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP,
             pad: 0,
             arch: Default::default(),
         };
-
         self.kvm_vcpu
-            .set_guest_debug(&dregs)
+            .set_guest_debug(&debug_struct)
             .map_err(|_| VmError::HvError("Could not set debug registers"))?;
 
         Ok(())
@@ -334,13 +374,14 @@ impl Vm {
 
     /// Setups the necessary pieces for handling interrupts (TSS, TSS Stack, GDT slots, IDT)
     fn setup_exception_handling(&mut self) -> Result<()> {
-        const IDT_ADDRESS: u64 = 0xffffffffff000000;
+        // Defines usefull regions
+        const IDT_ADDRESS: u64 = 0xffff_ffff_ff00_0000;
         const IDT_HANDLERS: u64 = IDT_ADDRESS + PAGE_SIZE as u64;
         const GDT_ADDRESS: u64 = IDT_ADDRESS + (PAGE_SIZE * 2) as u64;
         const TSS_ADDRESS: u64 = IDT_ADDRESS + (PAGE_SIZE * 3) as u64;
         const STACK_ADDRESS: u64 = IDT_ADDRESS + (PAGE_SIZE * 4) as u64;
 
-        // 4kb should be enough for simply handling interrupts
+        // A stack size of 4KB should be enough for simply handling interrupts
         const STACK_SIZE: usize = PAGE_SIZE;
 
         // Setting up the GDT
@@ -350,26 +391,32 @@ impl Vm {
             PagePermissions::READ | PagePermissions::WRITE,
         )?;
 
-        // Setting up segments
-        self.memory.write_val(GDT_ADDRESS, 0u64)?; // Null
+        // Setting up the null segment
+        self.memory.write_val(GDT_ADDRESS, 0u64)?;
+        // Setting up the 64 bits code segment
         self.memory
-            .write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?; // Code
-
-        // TSS GDT entry
+            .write_val(GDT_ADDRESS + 8, 0x00209a0000000000u64)?;
+        // Setting up the TSS entry
         self.memory.write_val(
             GDT_ADDRESS + 16,
             TssEntry::new(TSS_ADDRESS, PrivilegeLevel::Ring0),
         )?;
 
-        // TSS structure
-        let mut tss = Tss::new();
-        tss.set_ist(1, STACK_ADDRESS + (STACK_SIZE - 0x100) as u64);
+        // Set the sepecial registers to reference the GDT
+        self.special_registers.gdt.base = GDT_ADDRESS;
+        self.special_registers.gdt.limit = (8 * 3) - 1;
 
+        // Setting up the TSS
         self.memory
             .mmap(TSS_ADDRESS, PAGE_SIZE, PagePermissions::READ)?;
+
+        // Create the TSS with an IST alternative stack at index 1
+        let mut tss = Tss::new();
+        tss.set_ist(1, STACK_ADDRESS + (STACK_SIZE - 0x100) as u64);
+        // Write the structure in memory
         self.memory.write_val(TSS_ADDRESS, tss)?;
 
-        // Set the tr register to the tss
+        // Set the tr register to the TSS
         self.special_registers.tr = kvm_segment {
             base: TSS_ADDRESS,
             limit: (core::mem::size_of::<Tss>() - 1) as u32,
@@ -392,9 +439,9 @@ impl Vm {
             PAGE_SIZE,
             PagePermissions::READ | PagePermissions::EXECUTE,
         )?;
-
         self.hypercall_page = IDT_HANDLERS;
 
+        // Loop through IDT handlers
         for i in 0..32 {
             let handler_code: &[u8] = &[
                 0x6a, i as u8, // push <exception index>
@@ -411,6 +458,7 @@ impl Vm {
         let mut entries = [IdtEntry::new(); 32];
         let entries_size = entries.len() * std::mem::size_of::<IdtEntry>();
 
+        // Loop through IDT entries
         for i in 0..32 {
             entries[i] = IdtEntryBuilder::new()
                 .base(IDT_HANDLERS + (i * 32) as u64)
@@ -420,15 +468,13 @@ impl Vm {
                 .ist(1)
                 .collect();
         }
-
-        self.special_registers.idt.base = IDT_ADDRESS;
-        self.special_registers.idt.limit = (entries_size - 1) as u16;
-        self.special_registers.gdt.base = GDT_ADDRESS;
-        self.special_registers.gdt.limit = 0xFF;
-
         self.memory.write_val(IDT_ADDRESS, entries)?;
 
-        // Allocate stack for exception handling
+        // Set the sepecial registers to reference the IDT
+        self.special_registers.idt.base = IDT_ADDRESS;
+        self.special_registers.idt.limit = (entries_size - 1) as u16;
+
+        // Setting up the alternativ stack by allocating it for exception handling
         self.memory.mmap(
             STACK_ADDRESS,
             STACK_SIZE,
@@ -544,15 +590,15 @@ impl Vm {
         // The second bit of rflags must always be set.
         self.registers.rflags |= 1 << 1;
 
+        // Set registers and special registers
         self.kvm_vcpu
             .set_regs(&self.registers)
             .map_err(|_| VmError::HvError("Could not commit registers"))?;
-
         self.kvm_vcpu
             .set_sregs(&self.special_registers)
             .map_err(|_| VmError::HvError("Could not commit special registers"))?;
 
-        // gs_base and fs_base need to go through msrs
+        // Set gs_base and fs_base through msrs
         let msrs = Msrs::from_entries(&[
             kvm_msr_entry {
                 index: IA32_FS_BASE,
@@ -564,27 +610,32 @@ impl Vm {
                 data: self.gs_base,
                 ..Default::default()
             },
-        ]);
+        ])
+        .unwrap();
         self.kvm_vcpu
             .set_msrs(&msrs)
             .map_err(|_| VmError::HvError("Could not commit fsbase and gsbase"))?;
 
-        // Get special registers
+        // Get registers and special registers
         self.registers = self
             .kvm_vcpu
             .get_regs()
             .map_err(|_| VmError::HvError("Could not get special registers"))?;
-        // Get special registers
         self.special_registers = self
             .kvm_vcpu
             .get_sregs()
             .map_err(|_| VmError::HvError("Could not get general registers"))?;
+
+        // Update kvm vcpu run region
+        self.kvm_vcpu_run.as_mut_ref().s.regs.regs = self.registers;
+        self.kvm_vcpu_run.as_mut_ref().s.regs.sregs = self.special_registers;
         self.kvm_vcpu_run.as_mut_ref().kvm_dirty_regs = 0;
 
         Ok(())
     }
 
     /// Commit local copy of registers to kvm
+    #[inline]
     fn commit_registers(&mut self) -> Result<()> {
         // The second bit of rflags must always be set.
         self.registers.rflags |= 1 << 1;
@@ -606,7 +657,8 @@ impl Vm {
                 data: self.gs_base,
                 ..Default::default()
             },
-        ]);
+        ])
+        .unwrap();
 
         self.kvm_vcpu
             .set_msrs(&msrs)
@@ -615,24 +667,27 @@ impl Vm {
         Ok(())
     }
 
-    /// Run the `VM` instance until the first `VM` that cannot be
+    /// Run the `Vm` instance until the first `Vm` that cannot be
     /// handled directly
     pub fn run(&mut self) -> Result<VmExit> {
         let result = loop {
+            // Commit potential modification done on registers
             self.commit_registers()?;
 
+            // Set the valid synchronised registers
             self.kvm_vcpu_run.as_mut_ref().kvm_valid_regs |=
                 KVM_SYNC_X86_REGS as u64 | KVM_SYNC_X86_SREGS as u64;
 
+            // Ask kvm to run the vm's vcpu
             let exit = self.kvm_vcpu.run();
 
-            // Synchronize registers
+            // Pull registers and special registers
             unsafe {
                 self.registers = self.kvm_vcpu_run.as_mut_ref().s.regs.regs;
                 self.special_registers = self.kvm_vcpu_run.as_mut_ref().s.regs.sregs;
             }
 
-            // Synchronize fs_base and gs_base
+            // Pull fs_base and gs_base
             let mut msrs = Msrs::from_entries(&[
                 kvm_msr_entry {
                     index: IA32_FS_BASE,
@@ -642,13 +697,13 @@ impl Vm {
                     index: IA32_GS_BASE,
                     ..Default::default()
                 },
-            ]);
+            ])
+            .unwrap();
 
             let count = self
                 .kvm_vcpu
                 .get_msrs(&mut msrs)
                 .map_err(|_| VmError::HvError("Could not read fs_base and gs_base"))?;
-
             assert_eq!(count, 2, "Invalid number of msrs returned");
 
             let msrs_res = msrs.as_slice();
@@ -664,16 +719,18 @@ impl Vm {
             }
 
             match exit.unwrap() {
-                VcpuExit::Debug => break VmExit::Breakpoint,
+                VcpuExit::Debug(_) => {
+                    break VmExit::Breakpoint;
+                }
                 VcpuExit::Hlt => {
-                    // If code is outside of hypercall region, we forward the hlt
+                    // If code is outside of hypercall region, forward the hlt
                     if (self.registers.rip < self.hypercall_page)
                         || (self.registers.rip >= self.hypercall_page + PAGE_SIZE as u64)
                     {
                         break VmExit::Hlt;
                     }
 
-                    // If we are within the hypercall region we handle the
+                    // If we are within the hypercall region, handle the
                     // exception forwarding.
                     let exception_code: u64 = self.memory.read_val(self.registers.rsp)?;
 
@@ -744,7 +801,7 @@ impl Vm {
         Ok(result)
     }
 
-    // Set `VM` registers from a `SnapshotRegisters` instance
+    // Set `Vm` registers from a `SnapshotRegisters` instance
     #[inline]
     pub fn set_regs_snapshot(&mut self, regs: &SnapshotRegisters) {
         self.set_reg(Register::Rax, regs.rax);
@@ -809,7 +866,7 @@ impl Vm {
         Ok(vm)
     }
 
-    /// Reset the `VM` state from an other one
+    /// Reset the `Vm` state from an other one
     pub fn reset(&mut self, other: &Vm) {
         // Reset registers
         self.registers = other.registers;
@@ -826,7 +883,7 @@ impl Vm {
             "Vm memory mismatch"
         );
 
-        // Get the dirty log from KVM
+        // Get the dirty log from kvm
         let dirty_log = self
             .kvm_vm
             .get_dirty_log(0, self.memory.host_memory_size())
@@ -858,6 +915,22 @@ impl Vm {
                 // Go tp the next bit
                 bm &= bm - 1;
             }
+        }
+
+        // Define the dirty log clear structure
+        let dirty_log = kvm_bindings::kvm_clear_dirty_log {
+            slot: 0,
+            num_pages: (self.memory.host_memory_size() / PAGE_SIZE) as u32,
+            first_page: 0,
+            __bindgen_anon_1: kvm_bindings::kvm_clear_dirty_log__bindgen_ty_1 {
+                dirty_bitmap: dirty_log.as_ptr() as *mut core::ffi::c_void,
+            },
+        };
+
+        // Clear dirty log
+        let ret = unsafe { ioctl::ioctl_with_ref(&self.kvm_vm, KVM_CLEAR_DIRTY_LOG(), &dirty_log) };
+        if ret != 0 {
+            panic!("Failed to clean dirty log");
         }
     }
 }
