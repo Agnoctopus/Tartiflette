@@ -1,49 +1,44 @@
-use tartiflette_vm::{Vm, Register, SnapshotInfo, PagePermissions};
+use crate::executor::{install_alarm_handler, HookResult, TartifletteExecutor};
+use crate::sysemu::SysEmu;
+
 use libafl::{
-    feedback_or,
     bolts::{
         current_nanos,
-        tuples::{tuple_list, tuple_list_type},
         launcher::Launcher,
         os::parse_core_bind_arg,
         rands::{Rand, StdRand},
-        shmem::{ShMemProvider, StdShMemProvider}
+        shmem::{ShMemProvider, StdShMemProvider},
+        tuples::{tuple_list, tuple_list_type},
     },
-    corpus::{Corpus, InMemoryCorpus,QueueCorpusScheduler},
-    inputs::{BytesInput, HasBytesVec},
+    corpus::{Corpus, InMemoryCorpus, QueueCorpusScheduler},
     executors::ExitKind,
-    state::{StdState, HasCorpus, HasRand, HasMetadata, HasMaxSize},
+    feedback_or,
+    feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    observers::{StdMapObserver, TimeObserver},
-    feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback, TimeFeedback},
     inputs::Input,
-    mutators::scheduled::StdScheduledMutator,
+    inputs::{BytesInput, HasBytesVec},
     mutators::mutations::{
-        ByteRandMutator,
-        BytesInsertMutator,
-        BytesSwapMutator,
-        BytesExpandMutator,
-        CrossoverInsertMutator,
-        CrossoverReplaceMutator,
+        ByteRandMutator, BytesExpandMutator, BytesInsertMutator, BytesSwapMutator,
+        CrossoverInsertMutator, CrossoverReplaceMutator,
     },
+    mutators::scheduled::StdScheduledMutator,
+    observers::{StdMapObserver, TimeObserver},
     stages::mutational::StdMutationalStage,
-    stats::MultiStats
+    state::{HasCorpus, HasMaxSize, HasMetadata, HasRand, StdState},
+    stats::MultiStats,
 };
 use serde::Deserialize;
-use crate::executor::{TartifletteExecutor, HookResult, install_alarm_handler};
-use crate::sysemu::SysEmu;
-use std::io::BufWriter;
+
 use std::cell::RefCell;
-use std::path::{PathBuf, Path};
-use std::rc::Rc;
 use std::fs::File;
-use std::time::Duration;
-use std::io::{
-    prelude::*,
-    BufReader,
-    LineWriter
-};
+use std::io::BufWriter;
+use std::io::{prelude::*, BufReader, LineWriter};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
+
+use tartiflette_vm::{PagePermissions, Register, SnapshotInfo, Vm};
 
 /// Configuration of the fuzzer
 #[derive(Copy, Clone)]
@@ -53,13 +48,13 @@ pub struct FuzzerConfig<'a> {
     /// Broker address
     pub broker_address: Option<&'a str>,
     /// Broker port
-    pub broker_port: &'a str
+    pub broker_port: &'a str,
 }
 
 /// Encoded javascript tokens
 #[derive(Deserialize)]
 struct TokenCache {
-    tokens: Vec<String>
+    tokens: Vec<String>,
 }
 
 /// Coverage byte size
@@ -69,8 +64,7 @@ static mut COVERAGE: [u8; COVERAGE_SIZE] = [0u8; COVERAGE_SIZE];
 
 /// Loads breakpoints from a file
 fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
-    let bpkt_file = File::open(s)
-        .expect("Could not open breakpoint file");
+    let bpkt_file = File::open(s).expect("Could not open breakpoint file");
     let reader = BufReader::new(bpkt_file);
     let mut result = Vec::new();
 
@@ -86,19 +80,19 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
 }
 
 /// Construct the list of mutator to be used for token fuzzing
- fn token_mutations<C, I, R, S>() -> tuple_list_type!(
-     ByteRandMutator<I, R, S>,
-     BytesInsertMutator<I, R, S>,
-     BytesSwapMutator<I, R, S>,
-     BytesExpandMutator<I, R, S>,
-     CrossoverReplaceMutator<C, I, R, S>,
-     CrossoverInsertMutator<C, I, R, S>
-    )
-    where
-        I: Input + HasBytesVec,
-        S: HasRand<R> + HasCorpus<C, I> + HasMetadata + HasMaxSize,
-        C: Corpus<I>,
-        R: Rand,
+fn token_mutations<C, I, R, S>() -> tuple_list_type!(
+    ByteRandMutator<I, R, S>,
+    BytesInsertMutator<I, R, S>,
+    BytesSwapMutator<I, R, S>,
+    BytesExpandMutator<I, R, S>,
+    CrossoverReplaceMutator<C, I, R, S>,
+    CrossoverInsertMutator<C, I, R, S>
+   )
+where
+    I: Input + HasBytesVec,
+    S: HasRand<R> + HasCorpus<C, I> + HasMetadata + HasMaxSize,
+    C: Corpus<I>,
+    R: Rand,
 {
     tuple_list!(
         ByteRandMutator::new(),
@@ -124,15 +118,16 @@ pub fn fuzz(config: FuzzerConfig) {
             .expect("Crash while parsing snapshot information");
         // Get the program module info. Userful for setting breakpoint when PIE
         // is enabled
-        let program_module = snapshot_info.modules.get("qjs")
+        let program_module = snapshot_info
+            .modules
+            .get("qjs")
             .expect("Could not find program module");
-
 
         // Load the VM state from the snapshot info + memory dump
         let mut orig_vm = Vm::from_snapshot(
             "./data/snapshot_info.json",
             "./data/snapshot_data.bin",
-            MEMORY_SIZE
+            MEMORY_SIZE,
         )
         .expect("Could not create vm from snapshot");
 
@@ -140,7 +135,12 @@ pub fn fuzz(config: FuzzerConfig) {
         const MMAP_START: u64 = 0x1337000;
         const MMAP_SIZE: u64 = 0x100000;
         const MMAP_END: u64 = MMAP_START + MMAP_SIZE;
-        orig_vm.mmap(MMAP_START, MMAP_SIZE as usize, PagePermissions::READ | PagePermissions::WRITE)
+        orig_vm
+            .mmap(
+                MMAP_START,
+                MMAP_SIZE as usize,
+                PagePermissions::READ | PagePermissions::WRITE,
+            )
             .expect("Could not allocate mmap memory");
 
         let sysemu = Rc::new(RefCell::new(SysEmu::new(MMAP_START, MMAP_END)));
@@ -148,7 +148,8 @@ pub fn fuzz(config: FuzzerConfig) {
         // Reserve area for the harness input place
         const INPUT_START: u64 = 0x22000;
         const INPUT_SIZE: u64 = 0x2000;
-        orig_vm.mmap(INPUT_START, INPUT_SIZE as usize, PagePermissions::READ)
+        orig_vm
+            .mmap(INPUT_START, INPUT_SIZE as usize, PagePermissions::READ)
             .expect("Could not allocate input memory");
 
         // Create the fuzzing harness
@@ -165,7 +166,8 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // Decode the encoded input to text javascript
             let mut input_buffer = [0u8; (INPUT_SIZE - 1) as usize];
-            let mut token_writer = BufWriter::with_capacity(INPUT_SIZE as usize - 1, input_buffer.as_mut());
+            let mut token_writer =
+                BufWriter::with_capacity(INPUT_SIZE as usize - 1, input_buffer.as_mut());
 
             // TODO: Use a BytesInput of u16 instead of u8
             // Loop through chunk of u16 inside the libafl input
@@ -174,7 +176,8 @@ pub fn fuzz(config: FuzzerConfig) {
                 let token_index: u16 = chunk[0] as u16 | ((chunk[1] as u16) << 8);
 
                 // Get the token str representation
-                let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
+                let token_str =
+                    &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
 
                 // Make sure to not overfeed the input buffer
                 if token_writer.buffer().len() + token_str.len() + 1 > token_writer.capacity() {
@@ -186,7 +189,7 @@ pub fn fuzz(config: FuzzerConfig) {
             }
 
             // Null terminate the fuzz case
-            token_writer.write(&[0u8 ;1]).unwrap();
+            token_writer.write(&[0u8; 1]).unwrap();
 
             // Set vm registers
             let js_input = token_writer.buffer();
@@ -244,14 +247,14 @@ pub fn fuzz(config: FuzzerConfig) {
             &orig_vm,
             Duration::from_millis(1000),
             tuple_list!(cov_observer, time_observer),
-            &mut harness
-        ).expect("Could not create executor");
+            &mut harness,
+        )
+        .expect("Could not create executor");
 
         // Exit hook to end the fuzz case when the guest calls exit(...)
-        let mut exit_hook = |_: &mut Vm| {
-            HookResult::Exit
-        };
-        executor.add_hook(program_module.start + 0x1768e, &mut exit_hook)
+        let mut exit_hook = |_: &mut Vm| HookResult::Exit;
+        executor
+            .add_hook(program_module.start + 0x1768e, &mut exit_hook)
             .expect("Could not install exit hook");
 
         // Install syscall hook
@@ -263,7 +266,7 @@ pub fn fuzz(config: FuzzerConfig) {
             // Emulate the syscall
             match emu.syscall(vm) {
                 true => HookResult::Continue,
-                false => HookResult::Exit
+                false => HookResult::Exit,
             }
         };
         executor.add_syscall_hook(&mut syscall_hook);
@@ -271,22 +274,21 @@ pub fn fuzz(config: FuzzerConfig) {
         // Load coverage breakponts
         let breakpoints = load_breakpoints("./data/breakpoints.txt");
         for bkpt in &breakpoints {
-            executor.add_coverage(program_module.start + bkpt)
+            executor
+                .add_coverage(program_module.start + bkpt)
                 .expect("Error while adding breakpoint");
         }
 
         println!("Added {} coverage breakpoints", breakpoints.len());
 
         // Setup a coverage hook to output coverage for lightouse
-        let cov_file = File::create("cov.txt")
-            .expect("Could not create coverage file");
+        let cov_file = File::create("cov.txt").expect("Could not create coverage file");
         let mut cov_file = LineWriter::new(cov_file);
         let mod_base = program_module.start;
 
         let mut coverage_hook = move |addr| {
             let offset = addr - mod_base;
-            write!(cov_file, "qjs+0x{:x}\n", offset)
-                .expect("Could not write to file");
+            write!(cov_file, "qjs+0x{:x}\n", offset).expect("Could not write to file");
         };
         executor.add_coverage_hook(&mut coverage_hook);
 
@@ -314,7 +316,9 @@ pub fn fuzz(config: FuzzerConfig) {
     // Port on which the broker will listen
     let port = config.broker_port.parse::<u16>().unwrap();
     // Address on which the broker is, None if it is local
-    let address = config.broker_address.map_or(None, |a| Some(a.parse::<SocketAddr>().unwrap()));
+    let address = config
+        .broker_address
+        .map_or(None, |a| Some(a.parse::<SocketAddr>().unwrap()));
     // Implementation of stats when in a multithreading context
     let stats = MultiStats::new(|s| println!("{}", s));
     // Provider for shared memory. Used by llmp for ipc
@@ -332,6 +336,6 @@ pub fn fuzz(config: FuzzerConfig) {
         .launch()
     {
         Ok(()) => (),
-        Err(err) => panic!("Failed to run launcher: {:?}", err)
+        Err(err) => panic!("Failed to run launcher: {:?}", err),
     }
 }
