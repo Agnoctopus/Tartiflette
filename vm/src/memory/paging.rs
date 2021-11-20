@@ -262,10 +262,22 @@ impl PageTableEntry {
         self.0.is_bit_set(Self::WRITE_CACHING_BIT)
     }
 
+    /// Set whether or not the write go directly to memory on this page
+    #[inline]
+    pub fn set_write_caching(&mut self, write_caching: bool) {
+        self.0.set_bit(Self::WRITE_CACHING_BIT, write_caching);
+    }
+
     /// Whether or not the cache is enable for this page
     #[inline]
     pub fn caching(&self) -> bool {
         !self.0.is_bit_set(Self::CACHE_DISABLE_BIT)
+    }
+
+    /// Set Whether or not the cache is enable for this page
+    #[inline]
+    pub fn set_caching(&mut self, caching: bool) {
+        self.0.set_bit(Self::CACHE_DISABLE_BIT, !caching)
     }
 
     /// Whether or not the page was accessed by the CPU

@@ -217,8 +217,8 @@ impl VirtualMemory {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
 /// Memory mapping inside the VirtualMemory
+#[derive(Debug, Copy, Clone)]
 pub struct Mapping {
     /// Address of the mapping
     pub address: u64,
