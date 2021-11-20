@@ -9,7 +9,7 @@ use libafl::{
         rands::{Rand, StdRand},
         shmem::{ShMemProvider, StdShMemProvider}
     },
-    corpus::{Corpus, InMemoryCorpus, QueueCorpusScheduler},
+    corpus::{Corpus, InMemoryCorpus,QueueCorpusScheduler},
     inputs::{BytesInput, HasBytesVec},
     executors::ExitKind,
     state::{StdState, HasCorpus, HasRand, HasMetadata, HasMaxSize},
@@ -17,8 +17,7 @@ use libafl::{
     observers::{StdMapObserver, TimeObserver},
     feedbacks::{MapFeedbackState, MaxMapFeedback, CrashFeedback, TimeFeedback},
     inputs::Input,
-    mutators::MutatorsTuple,
-    mutators::scheduled::{havoc_mutations, StdScheduledMutator},
+    mutators::scheduled::StdScheduledMutator,
     mutators::mutations::{
         ByteRandMutator,
         BytesInsertMutator,
@@ -49,8 +48,11 @@ use std::net::SocketAddr;
 /// Configuration of the fuzzer
 #[derive(Copy, Clone)]
 pub struct FuzzerConfig<'a> {
+    /// Cores configuration string
     pub cores: &'a str,
+    /// Broker address
     pub broker_address: Option<&'a str>,
+    /// Broker port
     pub broker_port: &'a str
 }
 
@@ -60,8 +62,10 @@ struct TokenCache {
     tokens: Vec<String>
 }
 
+/// Coverage byte size
+const COVERAGE_SIZE: usize = 1 << 15;
 // TODO: Find how to have a coverage map without unsafe and static
-static mut COVERAGE: [u8; 1 << 15] = [0u8; 1 << 15];
+static mut COVERAGE: [u8; COVERAGE_SIZE] = [0u8; COVERAGE_SIZE];
 
 /// Loads breakpoints from a file
 fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
@@ -81,6 +85,7 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
     result
 }
 
+/// Construct the list of mutator to be used for token fuzzing
  fn token_mutations<C, I, R, S>() -> tuple_list_type!(
      ByteRandMutator<I, R, S>,
      BytesInsertMutator<I, R, S>,
@@ -105,10 +110,10 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
     )
 }
 
-// Starts a fuzzing run
+/// Starts a fuzzing session given a `FuzzerConfig`
 pub fn fuzz(config: FuzzerConfig) {
     let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr| {
-        // XXX: Install the SIGALRM handler
+        // Install the SIGALRM handler
         install_alarm_handler();
 
         // Vm memory size, 32Mb should be enough
@@ -160,9 +165,10 @@ pub fn fuzz(config: FuzzerConfig) {
 
             // Decode the encoded input to text javascript
             let mut input_buffer = [0u8; (INPUT_SIZE - 1) as usize];
-            let mut token_writer = BufWriter::new(&mut input_buffer[..]);
+            let mut token_writer = BufWriter::with_capacity(INPUT_SIZE as usize - 1, input_buffer.as_mut());
 
             // TODO: Use a BytesInput of u16 instead of u8
+            // Loop through chunk of u16 inside the libafl input
             for chunk in input.bytes().chunks_exact(2) {
                 // Compute token index
                 let token_index: u16 = chunk[0] as u16 | ((chunk[1] as u16) << 8);
@@ -170,41 +176,50 @@ pub fn fuzz(config: FuzzerConfig) {
                 // Get the token str representation
                 let token_str = &token_cache.tokens[token_index as usize % token_cache.tokens.len()];
 
+                // Make sure to not overfeed the input buffer
+                if token_writer.buffer().len() + token_str.len() + 1 > token_writer.capacity() {
+                    break;
+                }
+
                 // Write token to memory
-                token_writer.write(token_str.as_bytes());
+                token_writer.write(token_str.as_bytes()).unwrap();
             }
 
-            // Set Vm registers
+            // Null terminate the fuzz case
+            token_writer.write(&[0u8 ;1]).unwrap();
+
+            // Set vm registers
             let js_input = token_writer.buffer();
-
-            // TODO: Investigate why the buffer returned by the BufWriter is sometimes bigger than
-            //       its backing array.
-            if js_input.len() > (INPUT_START - 1) as usize {
-                return ExitKind::Ok;
-            }
-
             vm.set_reg(Register::Rsi, INPUT_START);
-            vm.set_reg(Register::Rdx, js_input.len() as u64);
+            vm.set_reg(Register::Rdx, js_input.len() as u64 - 1);
 
             // Write the fuzz case to the vm memory
-            vm.write(INPUT_START, js_input)
+            vm.write(INPUT_START, &js_input)
                 .expect("Could not write fuzz case to vm memory");
 
             ExitKind::Ok
         };
 
         // Setup LibAFL
-        let cov_observer = StdMapObserver::new("coverage", unsafe { &mut COVERAGE });
+        // Create an observation channel using the coverage map
+        let cov = unsafe { &mut COVERAGE };
+        let cov_observer = StdMapObserver::new("coverage", cov);
+        // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
 
+        // The state of the coverage feedback
         let feedback_state = MapFeedbackState::with_observer(&cov_observer);
+
+        // Feedback to rate the interestingness of an input
         let feedback = feedback_or!(
             MaxMapFeedback::new(&feedback_state, &cov_observer),
             TimeFeedback::new_with_observer(&time_observer)
         );
+
+        // Feedback to choose if an input is a solution or not
         let objective = CrashFeedback::new();
 
-        // The fuzzer's state
+        // The fuzzer's state, create a State from scratch if restarting
         let mut state = state.unwrap_or_else(|| {
             StdState::new(
                 // First argument is the randomness sources
@@ -236,28 +251,25 @@ pub fn fuzz(config: FuzzerConfig) {
         let mut exit_hook = |_: &mut Vm| {
             HookResult::Exit
         };
-
         executor.add_hook(program_module.start + 0x1768e, &mut exit_hook)
             .expect("Could not install exit hook");
 
         // Install syscall hook
         let semu = Rc::clone(&sysemu);
-
         let mut syscall_hook = move |vm: &mut Vm| {
+            // Get the syscall emulation layer
             let mut emu = semu.borrow_mut();
 
-            if emu.syscall(vm) {
-                HookResult::Continue
-            } else {
-                HookResult::Exit
+            // Emulate the syscall
+            match emu.syscall(vm) {
+                true => HookResult::Continue,
+                false => HookResult::Exit
             }
         };
-
         executor.add_syscall_hook(&mut syscall_hook);
 
         // Load coverage breakponts
         let breakpoints = load_breakpoints("./data/breakpoints.txt");
-
         for bkpt in &breakpoints {
             executor.add_coverage(program_module.start + bkpt)
                 .expect("Error while adding breakpoint");
@@ -265,7 +277,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
         println!("Added {} coverage breakpoints", breakpoints.len());
 
-        // Collect coverage for lighthouse
+        // Setup a coverage hook to output coverage for lightouse
         let cov_file = File::create("cov.txt")
             .expect("Could not create coverage file");
         let mut cov_file = LineWriter::new(cov_file);
@@ -276,17 +288,15 @@ pub fn fuzz(config: FuzzerConfig) {
             write!(cov_file, "qjs+0x{:x}\n", offset)
                 .expect("Could not write to file");
         };
-
         executor.add_coverage_hook(&mut coverage_hook);
 
         // Load initial inputs
         let corpus_folders = &[PathBuf::from("./data/corpus")];
-
         state
             .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, corpus_folders)
             .expect("Could not load corpus files");
 
-        // Setup mutation stages
+        // Setup a mutator with a mutational stage
         let mutator = StdScheduledMutator::new(token_mutations());
         let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
@@ -322,6 +332,6 @@ pub fn fuzz(config: FuzzerConfig) {
         .launch()
     {
         Ok(()) => (),
-        Err(err) => panic!("failed to run launcher: {:?}", err)
+        Err(err) => panic!("Failed to run launcher: {:?}", err)
     }
 }
