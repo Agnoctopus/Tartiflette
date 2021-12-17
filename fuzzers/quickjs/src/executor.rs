@@ -199,7 +199,7 @@ where
                         self.orig_bytes.remove(&rip);
 
                         // Add the coverage to the map
-                        let map = map_observer.map_mut();
+                        let map = map_observer.map_mut().unwrap();
                         let bb_index = (rip as usize) % map.len();
                         map[bb_index] += 1;
 
