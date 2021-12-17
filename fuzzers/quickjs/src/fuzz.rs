@@ -25,7 +25,7 @@ use libafl::{
     observers::{StdMapObserver, TimeObserver},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, HasMaxSize, HasMetadata, HasRand, StdState},
-    stats::MultiStats,
+    monitors::MultiMonitor,
 };
 use serde::Deserialize;
 
@@ -106,7 +106,7 @@ where
 
 /// Starts a fuzzing session given a `FuzzerConfig`
 pub fn fuzz(config: FuzzerConfig) {
-    let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr| {
+    let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr, _core_id| {
         // Install the SIGALRM handler
         install_alarm_handler();
 
@@ -320,13 +320,13 @@ pub fn fuzz(config: FuzzerConfig) {
         .broker_address
         .map_or(None, |a| Some(a.parse::<SocketAddr>().unwrap()));
     // Implementation of stats when in a multithreading context
-    let stats = MultiStats::new(|s| println!("{}", s));
+    let monitor = MultiMonitor::new(|s| println!("{}", s));
     // Provider for shared memory. Used by llmp for ipc
     let shmem_provider = StdShMemProvider::new().unwrap();
 
     match Launcher::builder()
         .shmem_provider(shmem_provider)
-        .stats(stats)
+        .monitor(monitor)
         .run_client(&mut run_client)
         .cores(&cores)
         .broker_port(port)
