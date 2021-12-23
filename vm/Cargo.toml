@@ -1,18 +1,30 @@
 [package]
 name = "tartiflette-vm"
-version = "0.1.0"
-edition = "2018"
+description= "Unicorn like wrappers around backends"
+version = "0.2.0"
 authors = ["César Belley <cesar.belley@lse.epita.fr>",
            "Tanguy Dubroca <tanguy.dubroca@lse.epita.fr>"]
-license = "GPL-2.0"
+edition = "2018"
+readme = "README.md"
+
+documentation = "https://github.com/MattGorko/Tartiflette"
+homepage = "https://github.com/MattGorko/Tartiflette"
 repository = "https://github.com/MattGorko/Tartiflette"
+
 keywords = ["kvm", "emulation"]
-description= "Unicorn like wrappers around kvm"
+categories = []
+license = "GPL-2.0"
+
 
 [dependencies]
-kvm-ioctls = "0.11.0"
-kvm-bindings = "0.5.0"
-nix = "0.23.0"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+kvm-ioctls = "0.11.0"
+kvm-bindings = "0.5.0"
+nix = "0.23.1"
 vmm-sys-util = "0.9.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.9", features = ["memoryapi"] }

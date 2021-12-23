@@ -1,7 +1,5 @@
 //! Virtual Memory Library
 
-#![warn(missing_docs)]
-
 mod paging;
 mod phys;
 mod virt;

@@ -5,7 +5,15 @@ use super::MemoryError;
 use super::{Result, PAGE_SIZE};
 
 use crate::bits::Alignement;
+
+#[cfg(target_os = "linux")]
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
+
+#[cfg(target_os = "windows")]
+use winapi::um::{
+    memoryapi::{VirtualAlloc, VirtualFree},
+    winnt,
+};
 
 /// Virtual machine physical memory
 #[derive(Debug)]
@@ -20,6 +28,7 @@ pub struct PhysicalMemory {
 
 impl PhysicalMemory {
     /// Create a new instance of `PhysicalMemory`
+    #[cfg(target_os = "linux")]
     pub fn new(memory_size: usize) -> Result<Self> {
         // Align size
         let size = memory_size.align_power2(PAGE_SIZE);
@@ -36,6 +45,31 @@ impl PhysicalMemory {
             )
         }
         .map_err(|_| MemoryError::PhysmemAlloc)?;
+
+        Ok(Self {
+            raw_data: raw_data as *mut u8,
+            size: size,
+            top: 0,
+        })
+    }
+
+    /// Create a new instance of `PhysicalMemory`
+    #[cfg(target_os = "windows")]
+    pub fn new(memory_size: usize) -> Result<Self> {
+        // Align size
+        let size = memory_size.align_power2(PAGE_SIZE);
+
+        let raw_data = unsafe {
+            VirtualAlloc(
+                core::ptr::null_mut(),
+                size,
+                winnt::MEM_COMMIT,
+                winnt::PAGE_READWRITE,
+            )
+        };
+        if raw_data == core::ptr::null_mut() {
+            return Err(MemoryError::PhysmemAlloc);
+        }
 
         Ok(Self {
             raw_data: raw_data as *mut u8,
@@ -147,6 +181,12 @@ impl FrameAllocator for PhysicalMemory {
 
 impl Drop for PhysicalMemory {
     fn drop(&mut self) {
-        unsafe { munmap(self.raw_data.cast(), self.size).unwrap() }
+        unsafe {
+            #[cfg(target_os = "linux")]
+            munmap(self.raw_data.cast(), self.size).unwrap();
+
+            #[cfg(target_os = "windows")]
+            VirtualFree(self.raw_data.cast(), self.size, winnt::MEM_DECOMMIT);
+        }
     }
 }
