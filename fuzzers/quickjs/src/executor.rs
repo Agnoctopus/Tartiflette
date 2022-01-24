@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 use libafl::{
     executors::{Executor, ExitKind, HasObservers},
@@ -10,6 +11,7 @@ use nix::unistd::alarm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
 use std::time::{Duration, Instant};
+
 use tartiflette_vm::{Register, Vm, VmExit};
 
 const INT3: u8 = 0xCC;
@@ -54,7 +56,7 @@ pub enum HookResult {
 pub type TartifletteHook = dyn FnMut(&mut Vm) -> HookResult;
 pub type CoverageHook = dyn FnMut(u64);
 
-pub struct TartifletteExecutor<'a, H, I, OT, S>
+pub struct TartifletteExecutor<'a, H, I, OT: Debug, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
@@ -84,7 +86,7 @@ where
     phantom: PhantomData<(I, S)>,
 }
 
-impl<'a, EM, H, I, OT, S, Z> Executor<EM, I, S, Z> for TartifletteExecutor<'a, H, I, OT, S>
+impl<'a, EM, H, I, OT: Debug, S, Z> Executor<EM, I, S, Z> for TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
@@ -255,7 +257,7 @@ where
     }
 }
 
-impl<'a, H, I, OT, S> TartifletteExecutor<'a, H, I, OT, S>
+impl<'a, H, I, OT: Debug, S> TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
@@ -358,7 +360,7 @@ where
     }
 }
 
-impl<'a, H, I, OT, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, OT, S>
+impl<'a, H, I, OT: Debug, S> HasObservers<I, OT, S> for TartifletteExecutor<'a, H, I, OT, S>
 where
     H: FnMut(&mut Vm, &I) -> ExitKind,
     I: Input,
@@ -372,5 +374,19 @@ where
     #[inline]
     fn observers_mut(&mut self) -> &mut OT {
         &mut self.observers
+    }
+}
+
+impl<'a, H, I, OT, S> Debug for TartifletteExecutor<'a, H, I, OT, S>
+where
+    H: FnMut(&mut Vm, &I) -> ExitKind,
+    I: Input,
+    OT: ObserversTuple<I, S>,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TartifletteExecutor")
+            .field("harness_fn", &"<fn>")
+            .field("observers", &self.observers)
+            .finish_non_exhaustive()
     }
 }

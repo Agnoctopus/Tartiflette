@@ -12,7 +12,7 @@ description= "Unicorn like wrappers around kvm"
 [dependencies]
 kvm-ioctls = "0.11.0"
 kvm-bindings = "0.5.0"
-nix = "0.23.0"
+nix = "0.23.1"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 vmm-sys-util = "0.9.0"

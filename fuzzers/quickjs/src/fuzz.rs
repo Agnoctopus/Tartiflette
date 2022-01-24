@@ -5,7 +5,7 @@ use libafl::{
     bolts::{
         current_nanos,
         launcher::Launcher,
-        os::parse_core_bind_arg,
+        os::Cores,
         rands::{Rand, StdRand},
         shmem::{ShMemProvider, StdShMemProvider},
         tuples::{tuple_list, tuple_list_type},
@@ -17,6 +17,7 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::Input,
     inputs::{BytesInput, HasBytesVec},
+    monitors::MultiMonitor,
     mutators::mutations::{
         ByteRandMutator, BytesExpandMutator, BytesInsertMutator, BytesSwapMutator,
         CrossoverInsertMutator, CrossoverReplaceMutator,
@@ -25,7 +26,6 @@ use libafl::{
     observers::{StdMapObserver, TimeObserver},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, HasMaxSize, HasMetadata, HasRand, StdState},
-    monitors::MultiMonitor,
 };
 use serde::Deserialize;
 
@@ -80,20 +80,14 @@ fn load_breakpoints<T: AsRef<Path>>(s: T) -> Vec<u64> {
 }
 
 /// Construct the list of mutator to be used for token fuzzing
-fn token_mutations<C, I, R, S>() -> tuple_list_type!(
-    ByteRandMutator<I, R, S>,
-    BytesInsertMutator<I, R, S>,
-    BytesSwapMutator<I, R, S>,
-    BytesExpandMutator<I, R, S>,
-    CrossoverReplaceMutator<C, I, R, S>,
-    CrossoverInsertMutator<C, I, R, S>
-   )
-where
-    I: Input + HasBytesVec,
-    S: HasRand<R> + HasCorpus<C, I> + HasMetadata + HasMaxSize,
-    C: Corpus<I>,
-    R: Rand,
-{
+fn token_mutations() -> tuple_list_type!(
+    ByteRandMutator,
+    BytesInsertMutator,
+    BytesSwapMutator,
+    BytesExpandMutator,
+    CrossoverReplaceMutator,
+    CrossoverInsertMutator
+) {
     tuple_list!(
         ByteRandMutator::new(),
         BytesInsertMutator::new(),
@@ -312,7 +306,7 @@ pub fn fuzz(config: FuzzerConfig) {
 
     // Launcher setup
     // List of cores on which to run the fuzzer, use "all" to run on all cores
-    let cores = parse_core_bind_arg(config.cores).unwrap();
+    let cores = Cores::from_cmdline(config.cores).unwrap();
     // Port on which the broker will listen
     let port = config.broker_port.parse::<u16>().unwrap();
     // Address on which the broker is, None if it is local

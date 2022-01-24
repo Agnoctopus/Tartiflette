@@ -10,7 +10,6 @@ use fuzz::FuzzerConfig;
 fn main() {
     // Get the program args as Vec<&str>
     let args: Vec<String> = std::env::args().collect();
-    let args: Vec<&str> = args.iter().map(String::as_ref).collect();
 
     // Create the `App` CLI parsing object
     let app = App::new("quickjs-fuzzer")
@@ -19,7 +18,7 @@ fn main() {
         .about(clap::crate_description!())
         .arg(
             Arg::with_name("cores")
-                .short("c")
+                .short('c')
                 .long("core")
                 .value_name("CORES")
                 .takes_value(true)
@@ -28,7 +27,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("broker_address")
-                .short("a")
+                .short('a')
                 .long("address")
                 .value_name("BROKER_ADDRESS")
                 .takes_value(true)
@@ -36,7 +35,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("broker_port")
-                .short("p")
+                .short('p')
                 .long("port")
                 .value_name("BROKER_PORT")
                 .help("port of the broker")
@@ -46,7 +45,7 @@ fn main() {
 
     // Get the program args matches
     let matches = app
-        .get_matches_from_safe(args)
+        .try_get_matches_from(args)
         .map_err(|error| format!("{}", error))
         .unwrap();
 
