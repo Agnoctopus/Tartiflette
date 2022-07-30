@@ -4,7 +4,7 @@ mod executor;
 mod fuzz;
 mod sysemu;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use fuzz::FuzzerConfig;
 
 fn main() {
@@ -12,12 +12,12 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     // Create the `App` CLI parsing object
-    let app = App::new("quickjs-fuzzer")
+    let command = Command::new("quickjs-fuzzer")
         .version("0.0.1")
         .author(clap::crate_authors!("\n"))
         .about(clap::crate_description!())
         .arg(
-            Arg::with_name("cores")
+            Arg::new("cores")
                 .short('c')
                 .long("core")
                 .value_name("CORES")
@@ -26,7 +26,7 @@ fn main() {
                 .help("cores on wich to run the fuzzer"),
         )
         .arg(
-            Arg::with_name("broker_address")
+            Arg::new("broker_address")
                 .short('a')
                 .long("address")
                 .value_name("BROKER_ADDRESS")
@@ -34,7 +34,7 @@ fn main() {
                 .help("ip address of the broker"),
         )
         .arg(
-            Arg::with_name("broker_port")
+            Arg::new("broker_port")
                 .short('p')
                 .long("port")
                 .value_name("BROKER_PORT")
@@ -44,10 +44,7 @@ fn main() {
         );
 
     // Get the program args matches
-    let matches = app
-        .try_get_matches_from(args)
-        .map_err(|error| format!("{}", error))
-        .unwrap();
+    let matches = command.get_matches_from(args);
 
     // Compute the fuzzer configuration
     let config = FuzzerConfig {

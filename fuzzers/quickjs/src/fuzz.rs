@@ -3,19 +3,18 @@ use crate::sysemu::SysEmu;
 
 use libafl::{
     bolts::{
+        core_affinity::Cores,
         current_nanos,
         launcher::Launcher,
-        os::Cores,
-        rands::{Rand, StdRand},
+        rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider},
         tuples::{tuple_list, tuple_list_type},
     },
-    corpus::{Corpus, InMemoryCorpus, QueueCorpusScheduler},
+    corpus::InMemoryCorpus,
     executors::ExitKind,
     feedback_or,
-    feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    inputs::Input,
     inputs::{BytesInput, HasBytesVec},
     monitors::MultiMonitor,
     mutators::mutations::{
@@ -24,8 +23,9 @@ use libafl::{
     },
     mutators::scheduled::StdScheduledMutator,
     observers::{StdMapObserver, TimeObserver},
+    schedulers::QueueScheduler,
     stages::mutational::StdMutationalStage,
-    state::{HasCorpus, HasMaxSize, HasMetadata, HasRand, StdState},
+    state::StdState,
 };
 use serde::Deserialize;
 
@@ -100,7 +100,7 @@ fn token_mutations() -> tuple_list_type!(
 
 /// Starts a fuzzing session given a `FuzzerConfig`
 pub fn fuzz(config: FuzzerConfig) {
-    let mut run_client = |state: Option<StdState<_, _, _, _, _>>, mut mgr, _core_id| {
+    let mut run_client = |state: Option<_>, mut mgr, _core_id| {
         // Install the SIGALRM handler
         install_alarm_handler();
 
@@ -205,16 +205,16 @@ pub fn fuzz(config: FuzzerConfig) {
         let time_observer = TimeObserver::new("time");
 
         // The state of the coverage feedback
-        let feedback_state = MapFeedbackState::with_observer(&cov_observer);
+        //let feedback_state = MapFeedbackState::with_observer(&cov_observer);
 
         // Feedback to rate the interestingness of an input
-        let feedback = feedback_or!(
-            MaxMapFeedback::new(&feedback_state, &cov_observer),
+        let mut feedback = feedback_or!(
+            MaxMapFeedback::new(&cov_observer),
             TimeFeedback::new_with_observer(&time_observer)
         );
 
         // Feedback to choose if an input is a solution or not
-        let objective = CrashFeedback::new();
+        let mut objective = CrashFeedback::new();
 
         // The fuzzer's state, create a State from scratch if restarting
         let mut state = state.unwrap_or_else(|| {
@@ -226,13 +226,15 @@ pub fn fuzz(config: FuzzerConfig) {
                 // Third argument is the solutions corpus (here crashes)
                 InMemoryCorpus::new(),
                 // Fourth argument is the feedback states, used to evaluate the input
-                tuple_list!(feedback_state),
+                &mut feedback,
+                &mut objective,
             )
+            .unwrap()
         });
 
         // Setting up the fuzzer
         // The corpus fuzz case scheduling policy
-        let corpus_scheduler = QueueCorpusScheduler::new();
+        let corpus_scheduler = QueueScheduler::new();
         // The fuzzer itself
         let mut fuzzer = StdFuzzer::new(corpus_scheduler, feedback, objective);
 

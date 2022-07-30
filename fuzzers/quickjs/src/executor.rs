@@ -1,9 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
+use libafl::bolts::AsMutSlice;
 use libafl::{
     executors::{Executor, ExitKind, HasObservers},
     inputs::Input,
-    observers::{MapObserver, ObserversTuple, StdMapObserver},
+    observers::{ObserversTuple, StdMapObserver},
     Error,
 };
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
@@ -201,7 +202,7 @@ where
                         self.orig_bytes.remove(&rip);
 
                         // Add the coverage to the map
-                        let map = map_observer.map_mut().unwrap();
+                        let map = map_observer.as_mut_slice();
                         let bb_index = (rip as usize) % map.len();
                         map[bb_index] += 1;
 
